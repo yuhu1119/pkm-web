@@ -1,0 +1,11 @@
+{
+  "server": "https://your-speedloop-host",
+  "token": "sl_deploy_replace_me",
+  "projects": {
+    "frontend": {
+      "id": 0,
+      "buildDir": "dist",
+      "buildCommand": "npm run build"
+    }
+  }
+}

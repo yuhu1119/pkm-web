@@ -2,6 +2,8 @@
 
 独立 Vite + React 项目，通过平台 SSO 进入，不再提供本地账号密码。
 
+**从建 GitHub 到 SpeedLoop 联调的逐步说明见 [GETTING_STARTED.md](./GETTING_STARTED.md)。**
+
 ## 环境变量
 
 | 变量 | 说明 |

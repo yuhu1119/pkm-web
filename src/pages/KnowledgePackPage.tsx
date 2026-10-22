@@ -1,31 +1,21 @@
-import { Alert, Button, Card, Input, InputNumber, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload, message } from "antd";
+import { Alert, Button, Card, Input, InputNumber, Select, Space, Switch, Table, Tabs, Tag, Typography, message } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, downloadAuth } from "../api";
+import { api } from "../api";
 import GovernanceTag from "../components/GovernanceTag";
-import ImportReviewDrawer from "../components/ImportReviewDrawer";
 import { KNOWLEDGE_MODELS, workspacePath } from "../paths";
 import { useProduct } from "../product";
 
 type FeedKind = "rag" | "sft" | "pretrain";
 
 const STEPS = [
-  { no: "01", title: "治理完成", desc: "对象必填有效并已发布。未治理内容不会进入预览或版本。" },
-  { no: "02", title: "选定范围", desc: "按一级模型或对象类型缩小切片，再看模型会读到什么。" },
-  { no: "03", title: "预览 / 试问", desc: "看 System Prompt、命中切片和组装后的 messages。" },
-  { no: "04", title: "打成版本", desc: "正式下载与对接只走冻结版本，不要用本页的活数据当发货口。" },
-];
-
-const RELEASE_FORMATS = [
-  { fmt: "system", label: "System Prompt", file: "system-prompt.txt" },
-  { fmt: "rag", label: "RAG JSONL", file: "rag-chunks.jsonl" },
-  { fmt: "sft", label: "指令微调 JSONL", file: "llm-sft.jsonl" },
-  { fmt: "pretrain", label: "预训练 JSONL", file: "llm-pretrain.jsonl" },
-  { fmt: "corpus", label: "问答 Markdown", file: "llm-corpus.md" },
+  { no: "01", title: "治理完成", desc: "必填完整后点击「治理」。未治理内容不会进入预览。" },
+  { no: "02", title: "选定范围", desc: "按一级模型或对象类型缩小要预览的切片。" },
+  { no: "03", title: "预览 / 试问", desc: "校验系统提示、命中切片和一次调用是否可推理。" },
 ];
 
 /**
- * 模型投喂：预览当前已治理知识给模型的输入，试问命中切片，再打成版本下载。
+ * 投喂预览：检查当前已治理知识拼给模型的输入，并试问命中切片。
  */
 export default function KnowledgePackPage() {
   const [pack, setPack] = useState<any>(null);
@@ -38,9 +28,6 @@ export default function KnowledgePackPage() {
   const [question, setQuestion] = useState("");
   const [trial, setTrial] = useState<any>(null);
   const [trialing, setTrialing] = useState(false);
-  const [packing, setPacking] = useState(false);
-  const [frozen, setFrozen] = useState<any>(null);
-  const [importPreview, setImportPreview] = useState<any>(null);
   const navigate = useNavigate();
   const { current: currentProduct } = useProduct();
   const base = currentProduct?.id ? workspacePath(currentProduct.id) : "/products";
@@ -61,17 +48,16 @@ export default function KnowledgePackPage() {
   const load = () => {
     api
       .get("/api/knowledge-pack", { params: filterParams })
-      .then((res) => {
-        setPack(res.data);
-        if (!frozen && res.data?.vs_latest?.release_id) {
-          setFrozen({
-            id: res.data.vs_latest.release_id,
-            version: res.data.vs_latest.version,
-            name: res.data.vs_latest.name,
-          });
-        }
-      })
-      .catch(() => message.error("模型输入加载失败"));
+      .then((res) => setPack(res.data))
+      .catch(() => {
+        message.error("模型输入加载失败");
+        setPack({
+          product: currentProduct || { name: "产品" },
+          summary: { type_total: 0, type_ready: 0, type_ready_scoped: 0, corpus_docs: 0, triples: 0 },
+          type_rows: [],
+          llm_input: { system_prompt: "", guide: [], rag_preview: "", messages: [] },
+        });
+      });
   };
 
   useEffect(() => {
@@ -146,33 +132,6 @@ export default function KnowledgePackPage() {
     }
   };
 
-  /**
-   * 把当前预览范围打成冻结版本。
-   */
-  const packVersion = async () => {
-    if (!currentProduct?.id) return;
-    setPacking(true);
-    try {
-      const scoped = modelCodes.length || typeIds.length;
-      const res = await api.post("/api/knowledge-releases", {
-        scope: "product",
-        product_ids: [currentProduct.id],
-        name: `${currentProduct.name} 投喂包${scoped ? " · 筛选范围" : ""}`,
-        note: scoped ? `筛选模型 ${modelCodes.join(",") || "全部"} / 对象 ${typeIds.join(",") || "按模型"}` : "",
-        model_codes: modelCodes,
-        type_ids: typeIds,
-        include_triples: includeTriples,
-      });
-      setFrozen(res.data);
-      message.success(`已打成 ${res.data.version}，请用下方按钮下载冻结文件`);
-      load();
-    } catch (err: any) {
-      message.error(err?.response?.data?.detail || "打包失败");
-    } finally {
-      setPacking(false);
-    }
-  };
-
   if (!pack) return null;
 
   return (
@@ -180,19 +139,13 @@ export default function KnowledgePackPage() {
       <Card>
         <div className="pkm-feed-hero">
           <div>
-            <div className="pkm-feed-kicker">MODEL INPUT</div>
-            <h1>{pack.product.name} · 模型投喂</h1>
+            <div className="pkm-feed-kicker">投喂预览</div>
+            <h1>{pack.product?.name || currentProduct?.name || "产品"} · 投喂预览</h1>
             <p>
-              本页只预览和试问：看当前已治理知识拼成的系统提示、检索切片和一次调用。正式下载、Token 对接请打成知识版本。未治理内容不会进入预览或版本。
+              检查已治理知识拼给模型的输入对不对：系统提示、命中切片、一次调用。未治理内容不会进入预览。
             </p>
           </div>
           <div>
-            <Button type="primary" loading={packing} onClick={packVersion}>
-              打成知识版本
-            </Button>
-            <Button type="link" onClick={() => navigate("/apps")} style={{ paddingRight: 0 }}>
-              去知识应用下载 / 对接
-            </Button>
             <div className="pkm-feed-stats">
               <div>
                 <b>{counts.rag || summary.corpus_docs || 0}</b>
@@ -290,12 +243,12 @@ export default function KnowledgePackPage() {
               message={`${vs.version} ${vs.name || ""}`.trim()}
               description={
                 vs.added?.length || vs.removed?.length || vs.changed?.length
-                  ? `新增 ${vs.added.length} · 减少 ${vs.removed.length} · 正文变化 ${vs.changed.length}。打新版本后，知识应用里的下载才会更新。`
+                  ? `新增 ${vs.added.length} · 减少 ${vs.removed.length} · 正文变化 ${vs.changed.length}。到知识应用打新版本后，下载才会更新。`
                   : "当前范围与最近冻结版切片一致。"
               }
             />
           ) : (
-            <Alert type="info" showIcon message="还没有本产品的冻结版本。预览确认后点「打成知识版本」。" />
+            <Alert type="info" showIcon message="还没有本产品的冻结版本。预览确认后到「知识应用」打包。" />
           )}
           {vs.has_release && (vs.added?.length || vs.removed?.length || vs.changed?.length) ? (
             <Table
@@ -361,31 +314,6 @@ export default function KnowledgePackPage() {
         ) : null}
       </Card>
 
-      <Card title="冻结后下载" style={{ marginTop: 16 }}>
-        {frozen?.id ? (
-          <>
-            <p className="pkm-muted" style={{ marginTop: 0 }}>
-              当前可下载 {frozen.version}（冻结文件，不会随之后的治理改动）。对接请到知识应用用 Token 拉同一版本。
-            </p>
-            <Space wrap>
-              {RELEASE_FORMATS.map((item) => (
-                <Button
-                  key={item.fmt}
-                  type={item.fmt === kind ? "primary" : "default"}
-                  onClick={() => downloadAuth(`/api/knowledge-releases/${frozen.id}/download?fmt=${item.fmt}`, `${frozen.version}-${item.file}`)}
-                >
-                  {item.label}
-                </Button>
-              ))}
-            </Space>
-          </>
-        ) : (
-          <p className="pkm-muted" style={{ marginTop: 0 }}>
-            还没有可下载的冻结版。预览和试问满意后，点右上角「打成知识版本」。
-          </p>
-        )}
-      </Card>
-
       <Card title="用途说明" style={{ marginTop: 16 }}>
         <Select
           value={kind}
@@ -411,7 +339,7 @@ export default function KnowledgePackPage() {
             </p>
             <p>
               <strong>下一步：</strong>
-              打成版本后下载对应文件，或在知识应用用 Token 拉取。
+              确认预览无误后，再到主菜单「知识应用」打成版本并下载。
             </p>
           </div>
         ) : null}
@@ -521,53 +449,7 @@ export default function KnowledgePackPage() {
               </Card>
             ),
           },
-          {
-            key: "io",
-            label: "填写模版",
-            children: (
-              <Space direction="vertical" size={16} style={{ width: "100%" }}>
-                <Card title="给人填的模版">
-                  <div className="pkm-muted" style={{ marginBottom: 12 }}>
-                    给产品经理的结构模版，不是给模型的语料。
-                  </div>
-                  <Button onClick={() => downloadAuth("/api/templates-bundle", "knowledge-templates.zip")}>下载全部模版包</Button>
-                </Card>
-                <Card title="实例表导入">
-                  <div className="pkm-muted" style={{ marginBottom: 12 }}>
-                    用 Excel 维护实例。导入会先对照，不是模型投喂文件。
-                  </div>
-                  <Space wrap>
-                    <Button onClick={() => downloadAuth("/api/export?fmt=csv", "knowledge.csv")}>导出 CSV</Button>
-                    <Upload
-                      showUploadList={false}
-                      accept=".json"
-                      customRequest={async ({ file, onSuccess, onError }) => {
-                        try {
-                          const text = await (file as File).text();
-                          const payload = JSON.parse(text);
-                          const res = await api.post("/api/import/preview", Array.isArray(payload) ? { items: payload } : payload);
-                          setImportPreview(res.data);
-                          onSuccess && onSuccess({}, new XMLHttpRequest());
-                        } catch (e) {
-                          message.error("导入失败，本期请使用 JSON");
-                          onError && onError(e as Error);
-                        }
-                      }}
-                    >
-                      <Button>导入 JSON</Button>
-                    </Upload>
-                  </Space>
-                </Card>
-              </Space>
-            ),
-          },
         ]}
-      />
-      <ImportReviewDrawer
-        open={!!importPreview}
-        preview={importPreview}
-        onClose={() => setImportPreview(null)}
-        onApplied={load}
       />
     </div>
   );

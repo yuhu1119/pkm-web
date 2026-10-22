@@ -1,5 +1,4 @@
 node_modules
 dist
-.env
-.speedloop.json
 .DS_Store
+.env

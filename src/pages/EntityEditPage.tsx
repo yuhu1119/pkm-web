@@ -1,7 +1,8 @@
 import { Button, Card, Form, Input, Select, Space, Tag, message } from "antd";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { api, Entity, KnowledgeType } from "../api";
+import { api, Entity, KnowledgeType, asPayload } from "../api";
+import FieldTableInput from "../components/FieldTableInput";
 
 /**
  * 知识实例新建/编辑表单。
@@ -15,6 +16,7 @@ export default function EntityEditPage() {
   const [typeMeta, setTypeMeta] = useState<KnowledgeType | null>(null);
   const [refOptions, setRefOptions] = useState<Entity[]>([]);
   const [impact, setImpact] = useState<any>(null);
+  const [current, setCurrent] = useState<Entity | null>(null);
   const typeFromQuery = new URLSearchParams(location.search).get("type") || "";
 
   useEffect(() => {
@@ -24,6 +26,7 @@ export default function EntityEditPage() {
         const entity: Entity = res.data.entity;
         const type: KnowledgeType = res.data.type;
         setTypeMeta(type);
+        setCurrent(entity);
         setImpact(res.data.impact);
         form.setFieldsValue({
           name: entity.name,
@@ -31,7 +34,7 @@ export default function EntityEditPage() {
           status: entity.status,
           tags: entity.tags,
           refs: (entity.refs || []).filter((r) => r.to_id).map((r) => r.to_id),
-          ...entity.payload,
+          ...asPayload(entity.payload),
         });
         const refs = await api.get("/api/entities");
         setRefOptions(refs.data);
@@ -68,6 +71,7 @@ export default function EntityEditPage() {
             typeMeta.fields.forEach((f) => {
               payload[f.key] = values[f.key] || "";
             });
+            if (!typeMeta.fields.some((f) => f.key === "aliases")) payload.aliases = values.aliases || "";
             const body = {
               type_id: typeMeta.entity_id,
               name: values.name,
@@ -77,6 +81,7 @@ export default function EntityEditPage() {
               payload,
               refs: (values.refs || []).map((to_id: number) => ({ to_id, relation: "引用" })),
               change_note: values.change_note || (isNew ? "创建" : "更新"),
+              version: current?.version,
             };
             try {
               if (isNew) {
@@ -99,6 +104,11 @@ export default function EntityEditPage() {
           <Form.Item name="summary" label="摘要">
             <Input.TextArea rows={2} />
           </Form.Item>
+          {!typeMeta.fields.some((field) => field.key === "aliases") ? (
+            <Form.Item name="aliases" label="别名" extra="其他叫法，逗号或顿号分隔。合并近名时会自动写入。">
+              <Input placeholder="如：店内立减、门店优惠" />
+            </Form.Item>
+          ) : null}
           {typeMeta.fields.map((field) => (
             <Form.Item
               key={field.key}
@@ -111,6 +121,8 @@ export default function EntityEditPage() {
                 <Select options={(field.options || []).map((o) => ({ label: o, value: o }))} allowClear />
               ) : field.type === "text" ? (
                 <Input />
+              ) : field.type === "table" ? (
+                <FieldTableInput columns={field.options || []} />
               ) : (
                 <Input.TextArea rows={3} />
               )}

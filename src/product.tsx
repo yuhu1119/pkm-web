@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { api } from "./api";
-import { parseWorkspaceProductId } from "./paths";
+import { api, apiErrorDetail, asList } from "./api";
+import { currentAppPathname, parseWorkspaceProductId } from "./paths";
 
 export interface ProductCard {
   id: number;
@@ -9,15 +9,20 @@ export interface ProductCard {
   description: string;
   owner?: string;
   status?: string;
+  created_by?: string;
   entity_count?: number;
   feature_count?: number;
   governed_types?: number;
+  can_read?: boolean;
+  can_write?: boolean;
+  online?: boolean;
 }
 
 interface ProductState {
   products: ProductCard[];
   current: ProductCard | null;
   loading: boolean;
+  error: string;
   setCurrentId: (id: number) => void;
   reload: () => Promise<void>;
 }
@@ -31,31 +36,43 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
   const [products, setProducts] = useState<ProductCard[]>([]);
   const [currentId, setCurrentId] = useState<number>(() => Number(localStorage.getItem("pkm_product_id") || 0));
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   const reload = async () => {
-    const res = await api.get("/api/products");
-    const rows: ProductCard[] = res.data || [];
-    setProducts(rows);
-    const fromUrl = parseWorkspaceProductId(window.location.pathname);
-    const stored = fromUrl || Number(localStorage.getItem("pkm_product_id") || 0);
-    const exists = rows.some((item) => item.id === stored);
-    const next = exists ? stored : rows[0]?.id || 0;
-    if (next && next !== Number(localStorage.getItem("pkm_product_id") || 0)) {
-      localStorage.setItem("pkm_product_id", String(next));
+    setLoading(true);
+    try {
+      const res = await api.get("/api/products");
+      const rows = asList<ProductCard>(res.data);
+      setProducts(rows);
+      setError("");
+      const fromUrl = parseWorkspaceProductId(currentAppPathname());
+      const stored = fromUrl || Number(localStorage.getItem("pkm_product_id") || 0);
+      const exists = rows.some((item) => item.id === stored);
+      const next = exists ? stored : rows[0]?.id || 0;
+      if (next && next !== Number(localStorage.getItem("pkm_product_id") || 0)) {
+        localStorage.setItem("pkm_product_id", String(next));
+      }
+      setCurrentId(next);
+    } catch (err) {
+      setProducts([]);
+      setError(apiErrorDetail(err, "产品列表加载失败"));
+      throw err;
+    } finally {
+      setLoading(false);
     }
-    setCurrentId(next);
-    setLoading(false);
   };
 
   useEffect(() => {
-    reload().catch(() => setLoading(false));
+    reload().catch(() => undefined);
   }, []);
 
-  const value = useMemo<ProductState>(
-    () => ({
-      products,
-      current: products.find((item) => item.id === currentId) || products[0] || null,
+  const value = useMemo<ProductState>(() => {
+    const list = Array.isArray(products) ? products : [];
+    return {
+      products: list,
+      current: list.find((item) => item.id === currentId) || list[0] || null,
       loading,
+      error,
       setCurrentId: (id: number) => {
         if (id === currentId) return;
         localStorage.setItem("pkm_product_id", String(id));
@@ -63,9 +80,8 @@ export function ProductProvider({ children }: { children: React.ReactNode }) {
         window.dispatchEvent(new Event("pkm-refresh"));
       },
       reload,
-    }),
-    [products, currentId, loading],
-  );
+    };
+  }, [products, currentId, loading, error]);
 
   return <ProductContext.Provider value={value}>{children}</ProductContext.Provider>;
 }

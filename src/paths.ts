@@ -19,12 +19,31 @@ export const KNOWLEDGE_MODELS = [
 const WORKSPACE_REST = /^(?:\/(?:overview|structure|knowledge(?:\/.*)?|sources|pack|search|graph|relations)?)?$/;
 
 /**
+ * 去掉前端部署子路径（Vite base），例如 /design/products/1 → /products/1。
+ * @param {string} pathname
+ */
+export function stripAppBase(pathname: string): string {
+  const base = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+  if (!base) return pathname;
+  if (pathname === base || pathname === `${base}/`) return "/";
+  if (pathname.startsWith(`${base}/`)) return pathname.slice(base.length) || "/";
+  return pathname;
+}
+
+/**
+ * React Router 的 basename，无尾斜杠。根路径部署时为空字符串。
+ */
+export function appBasename(): string {
+  return (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+}
+
+/**
  * 从 URL 解析当前产品知识工作台 ID。
  * 产品列表属于平台产品管理，不算进入工作台。
  * @param {string} pathname
  */
 export function parseWorkspaceProductId(pathname: string): number | null {
-  const match = pathname.match(/^\/products\/(\d+)(.*)$/);
+  const match = stripAppBase(pathname).match(/^\/products\/(\d+)(.*)$/);
   if (!match) return null;
   const id = Number(match[1]);
   if (!(id > 0)) return null;
@@ -37,6 +56,7 @@ export function parseWorkspaceProductId(pathname: string): number | null {
  * @param {string} pathname
  */
 export function isTopMenuPage(pathname: string): boolean {
+  pathname = stripAppBase(pathname);
   if (
     pathname === "/" ||
     pathname === "/landscape" ||
@@ -82,10 +102,40 @@ export function workspacePath(productId: number, sub = ""): string {
  * @param {number} nextId
  */
 export function swapWorkspaceProduct(pathname: string, nextId: number): string {
-  if (!parseWorkspaceProductId(pathname)) {
+  const path = stripAppBase(pathname);
+  if (!parseWorkspaceProductId(path)) {
     return workspacePath(nextId);
   }
-  return pathname.replace(/^\/products\/\d+/, `/products/${nextId}`);
+  return path.replace(/^\/products\/\d+/, `/products/${nextId}`);
+}
+
+/**
+ * 当前前端路由路径。Hash 路由读 hash，避免 /design/login 被当成服务器路径。
+ */
+export function currentAppPathname(): string {
+  if (typeof window === "undefined") return "/";
+  const hash = window.location.hash.replace(/^#/, "");
+  const hashPath = (hash.split("?")[0] || "").trim();
+  if (hashPath.startsWith("/")) return hashPath;
+  if (hashPath) return `/${hashPath}`;
+  return stripAppBase(window.location.pathname);
+}
+
+/**
+ * 是否已在登录页。
+ */
+export function isLoginLocation(): boolean {
+  if (typeof window === "undefined") return false;
+  const path = currentAppPathname();
+  return path === "/login" || path.endsWith("/login");
+}
+
+/**
+ * 只改 hash 进入登录页，静态托管不必存在 /design/login 这个文件。
+ */
+export function goLogin(): void {
+  if (isLoginLocation()) return;
+  window.location.hash = "#/login";
 }
 
 /**
@@ -93,7 +143,7 @@ export function swapWorkspaceProduct(pathname: string, nextId: number): string {
  */
 export function resolveProductId(): string {
   if (typeof window === "undefined") return "";
-  const fromUrl = parseWorkspaceProductId(window.location.pathname);
+  const fromUrl = parseWorkspaceProductId(currentAppPathname());
   if (fromUrl) return String(fromUrl);
   const stored = localStorage.getItem("pkm_product_id") || "";
   return stored !== "0" ? stored : "";

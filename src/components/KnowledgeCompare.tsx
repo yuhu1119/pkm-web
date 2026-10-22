@@ -1,4 +1,5 @@
 import { Alert, Button, Input, Popconfirm, Radio, Select, Space, Tag } from "antd";
+import FieldTableInput from "./FieldTableInput";
 import { useEffect, useMemo, useState } from "react";
 import type { KnowledgeType } from "../api";
 import {
@@ -22,9 +23,12 @@ interface Props {
   published?: boolean;
   evidence?: string;
   applying?: boolean;
+  /** 为真时不渲染底部确认按钮，由外层保存 / 治理接管。 */
+  hideActions?: boolean;
   onProposedChange?: (next: KnowledgeSnapshot) => void;
   onApply: (merged: KnowledgeSnapshot, note: string, action: CompareAction) => void;
   onKeep: () => void;
+  contradictions?: { key: string; label?: string }[];
 }
 
 /**
@@ -41,9 +45,11 @@ export default function KnowledgeCompare({
   published,
   evidence,
   applying,
+  hideActions,
   onProposedChange,
   onApply,
   onKeep,
+  contradictions,
 }: Props) {
   const rows = useMemo(() => buildCompareRows(typeMeta, current, proposed), [typeMeta, current, proposed]);
   const [decisions, setDecisions] = useState<Record<string, FieldDecision>>({});
@@ -98,6 +104,7 @@ export default function KnowledgeCompare({
             <div className="pkm-compare-label">
               {row.label}
               {row.required ? <em>必填</em> : null}
+              {contradictions?.some((item) => item.key === row.key) ? <Tag color="red">矛盾</Tag> : null}
               {row.blankIncoming ? <Tag>右侧为空，默认保留</Tag> : row.changed ? <Tag color="gold">有差异</Tag> : <Tag>相同</Tag>}
             </div>
             <div className="pkm-compare-cols">
@@ -142,6 +149,12 @@ export default function KnowledgeCompare({
                       value={row.proposed}
                       onChange={(e) => onProposedChange?.(patchSnapshot(proposed, row.key, e.target.value))}
                     />
+                  ) : row.type === "table" ? (
+                    <FieldTableInput
+                      value={row.proposed}
+                      columns={row.options || []}
+                      onChange={(value) => onProposedChange?.(patchSnapshot(proposed, row.key, value))}
+                    />
                   ) : (
                     <Input.TextArea
                       rows={row.key === "name" ? 1 : 3}
@@ -158,33 +171,37 @@ export default function KnowledgeCompare({
           </div>
         ))}
       </div>
-      <Input
-        value={note}
-        onChange={(e) => setNote(e.target.value)}
-        placeholder="变更说明，将写入版本历史"
-        disabled={locked}
-      />
-      <Space wrap>
-        <Button onClick={onKeep}>保留现有</Button>
-        {locked ? null : (
-          <>
-            <Button disabled={!takeCount && mode === "review"} loading={applying} onClick={() => submit("confirm")}>
-              确认变更{takeCount ? ` ${takeCount} 项` : ""}
-            </Button>
-            {published ? (
-              <Popconfirm title="已发布知识将被右侧内容整体替换，并写入新版本。确认覆盖？" onConfirm={() => submit("overwrite")}>
-                <Button danger loading={applying}>
-                  全部覆盖
+      {hideActions ? null : (
+        <>
+          <Input
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="变更说明，将写入版本历史"
+            disabled={locked}
+          />
+          <Space wrap>
+            <Button onClick={onKeep}>保留现有</Button>
+            {locked ? null : (
+              <>
+                <Button disabled={!takeCount && mode === "review"} loading={applying} onClick={() => submit("confirm")}>
+                  确认变更{takeCount ? ` ${takeCount} 项` : ""}
                 </Button>
-              </Popconfirm>
-            ) : (
-              <Button danger loading={applying} onClick={() => submit("overwrite")}>
-                全部覆盖
-              </Button>
+                {published ? (
+                  <Popconfirm title="已发布知识将被右侧内容整体替换，并写入新版本。确认覆盖？" onConfirm={() => submit("overwrite")}>
+                    <Button danger loading={applying}>
+                      全部覆盖
+                    </Button>
+                  </Popconfirm>
+                ) : (
+                  <Button danger loading={applying} onClick={() => submit("overwrite")}>
+                    全部覆盖
+                  </Button>
+                )}
+              </>
             )}
-          </>
-        )}
-      </Space>
+          </Space>
+        </>
+      )}
     </div>
   );
 }

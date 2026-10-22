@@ -1,7 +1,10 @@
-import { Button, Drawer, Dropdown, Form, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Dropdown, Form, Input, Modal, Popconfirm, Radio, Select, Space, Table, Tag, Typography, message } from "antd";
+import ResizableDrawer from "../components/ResizableDrawer";
+import { ResultTable } from "../components/SearchTable";
 import { useEffect, useState } from "react";
 import { api, downloadAuth } from "../api";
-import { useAuth } from "../auth";
+import { CAP_HINTS, hasCap, useAuth } from "../auth";
+import CapAction from "../components/CapAction";
 import { useProduct } from "../product";
 
 const FORMATS = [
@@ -29,13 +32,32 @@ interface ReleaseRow {
   created_at: string;
 }
 
+interface DiffItem {
+  id: number;
+  type_id?: string;
+  title?: string;
+}
+
+interface DiffResult {
+  from: ReleaseRow | null;
+  to: ReleaseRow;
+  added: DiffItem[];
+  removed: DiffItem[];
+  changed: DiffItem[];
+}
+
 /**
- * 把 UTC 时间格式化为本地时间。
+ * 展示时间。无时区的 SQLite 文本按原文；ISO 按 UTC 转成本地。
  * @param {string} value
  */
 function formatTime(value: string) {
-  const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
-  if (Number.isNaN(date.getTime())) return value;
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  if (/^\d{4}-\d{2}-\d{2} /.test(raw) && !/[zZ]$/.test(raw) && !/[+-]\d{2}:?\d{2}$/.test(raw)) {
+    return raw.slice(0, 16);
+  }
+  const date = new Date(/[zZ]$/.test(raw) || /[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`);
+  if (Number.isNaN(date.getTime())) return raw;
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
@@ -46,13 +68,20 @@ function formatTime(value: string) {
 export default function KnowledgeReleasesPanel() {
   const { user } = useAuth();
   const { products } = useProduct();
-  const canEdit = user?.role !== "viewer";
+  const canRelease = hasCap(user, "release_write");
+  const canPack = hasCap(user, "pack_write") || canRelease;
+  const canDownload = hasCap(user, "pack_download");
+  const canDock = hasCap(user, "app_write");
   const [rows, setRows] = useState<ReleaseRow[]>([]);
   const [open, setOpen] = useState(false);
   const [dock, setDock] = useState<ReleaseRow | null>(null);
   const [loading, setLoading] = useState(false);
   const [form] = Form.useForm();
   const scope = Form.useWatch("scope", form);
+  const [diffTo, setDiffTo] = useState<ReleaseRow | null>(null);
+  const [againstId, setAgainstId] = useState<number | undefined>();
+  const [diff, setDiff] = useState<DiffResult | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
 
   /**
    * 刷新版本列表。
@@ -70,6 +99,36 @@ export default function KnowledgeReleasesPanel() {
    * @param {ReleaseRow} row
    * @param {{fmt: string, file: string}} item
    */
+  /**
+   * 拉取两版切片增删改。
+   * @param {number} toId
+   * @param {number} [against]
+   */
+  const loadDiff = async (toId: number, against?: number) => {
+    setDiffLoading(true);
+    try {
+      const res = await api.get(`/api/knowledge-releases/${toId}/diff`, { params: against ? { against } : {} });
+      setDiff(res.data);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      message.error(detail || "对照失败");
+    } finally {
+      setDiffLoading(false);
+    }
+  };
+
+  /**
+   * 打开版本对照，默认对比上一版。
+   * @param {ReleaseRow} row
+   */
+  const openDiff = (row: ReleaseRow) => {
+    const older = rows.find((item) => item.id < row.id);
+    setDiffTo(row);
+    setAgainstId(older?.id);
+    setDiff(null);
+    loadDiff(row.id, older?.id);
+  };
+
   const download = (row: ReleaseRow, item: { fmt: string; file: string }) => {
     const zip = row.scope === "all";
     downloadAuth(`/api/knowledge-releases/${row.id}/download?fmt=${item.fmt}`, `${row.version}-${zip ? item.fmt + ".zip" : item.file}`);
@@ -92,29 +151,28 @@ export default function KnowledgeReleasesPanel() {
     <div>
       <div className="pkm-section-title">知识版本</div>
       <p className="pkm-page-desc" style={{ marginBottom: 12 }}>
-        把当时已治理知识打成冻结版本。可按单个产品、全部分册或多产品整合打包；修改知识后会自动打一版单产品包。在线对接请到下方先建 Token，再对版本接口。
+        唯一的打包入口。可按单个产品、全部分册或多产品整合；知识变更后会自动打一版单产品包。下载与对接都针对冻结版本。
       </p>
-      <Space style={{ marginBottom: 12 }}>
-        {canEdit ? (
-          <Button
-            type="primary"
-            onClick={() => {
-              form.resetFields();
-              form.setFieldsValue({ scope: "product" });
-              setOpen(true);
-            }}
-          >
-            打包版本
-          </Button>
-        ) : null}
-      </Space>
-      <Table
+      <ResultTable<ReleaseRow>
         rowKey="id"
-        size="small"
         loading={loading}
         dataSource={rows}
-        pagination={rows.length > 8 ? { pageSize: 8, showSizeChanger: false } : false}
+        onRefresh={load}
         locale={{ emptyText: "还没有版本。打包后即可下载或给其它 AI 平台对接。" }}
+        operations={
+          <CapAction allowed={canPack} hint={CAP_HINTS.release_write}>
+            <Button
+              type="primary"
+              onClick={() => {
+                form.resetFields();
+                form.setFieldsValue({ scope: "product" });
+                setOpen(true);
+              }}
+            >
+              新建
+            </Button>
+          </CapAction>
+        }
         columns={[
           { title: "版本", dataIndex: "version", width: 72 },
           { title: "名称", dataIndex: "name", ellipsis: true },
@@ -137,21 +195,30 @@ export default function KnowledgeReleasesPanel() {
           { title: "操作人", dataIndex: "created_by", width: 90 },
           {
             title: "操作",
-            width: 260,
+            key: "operations",
+            hideable: false,
+            width: 300,
             render: (_: unknown, row: ReleaseRow) => (
               <Space>
-                <Dropdown
-                  menu={{
-                    items: FORMATS.map((item) => ({ key: item.fmt, label: item.label })),
-                    onClick: ({ key }) => download(row, FORMATS.find((item) => item.fmt === key)!),
-                  }}
-                >
-                  <Button type="link">下载</Button>
-                </Dropdown>
-                <Button type="link" onClick={() => setDock(row)}>
-                  对接 AI
+                <Button type="link" onClick={() => openDiff(row)}>
+                  对照
                 </Button>
-                {canEdit ? (
+                <CapAction allowed={canDownload} hint={CAP_HINTS.pack_download}>
+                  <Dropdown
+                    menu={{
+                      items: FORMATS.map((item) => ({ key: item.fmt, label: item.label })),
+                      onClick: ({ key }) => download(row, FORMATS.find((item) => item.fmt === key)!),
+                    }}
+                  >
+                    <Button type="link">下载</Button>
+                  </Dropdown>
+                </CapAction>
+                <CapAction allowed={canDock} hint={CAP_HINTS.app_write}>
+                  <Button type="link" onClick={() => setDock(row)}>
+                    对接 AI
+                  </Button>
+                </CapAction>
+                {canRelease ? (
                   <Popconfirm
                     title="删除该冻结版本？不影响当前知识。"
                     onConfirm={async () => {
@@ -183,10 +250,34 @@ export default function KnowledgeReleasesPanel() {
           form={form}
           layout="vertical"
           onFinish={async (values) => {
+            const product_ids =
+              values.scope === "product" ? (values.product_id ? [values.product_id] : []) : values.product_ids || [];
+            try {
+              const ready = await api.get("/api/knowledge-releases/readiness", {
+                params: { scope: values.scope, product_ids: product_ids.join(",") },
+              });
+              if (!ready.data.can_pack) {
+                message.warning(ready.data.warning || "还没有已治理知识，不能打成知识版本。");
+                return;
+              }
+              if (ready.data.ungoverned) {
+                const ok = await new Promise<boolean>((resolve) => {
+                  Modal.confirm({
+                    title: "存在未治理知识",
+                    content: ready.data.warning,
+                    okText: "仍打包已治理部分",
+                    cancelText: "先去治理",
+                    onOk: () => resolve(true),
+                    onCancel: () => resolve(false),
+                  });
+                });
+                if (!ok) return;
+              }
+            } catch {
+              /* 无 readiness 时交给打包接口拦截空切片 */
+            }
             setLoading(true);
             try {
-              const product_ids =
-                values.scope === "product" ? (values.product_id ? [values.product_id] : []) : values.product_ids || [];
               await api.post("/api/knowledge-releases", { ...values, product_ids });
               message.success("已打包版本");
               setOpen(false);
@@ -225,7 +316,7 @@ export default function KnowledgeReleasesPanel() {
         </Form>
       </Modal>
 
-      <Drawer title={dock ? `${dock.version} · 对接 AI` : ""} open={!!dock} width={560} onClose={() => setDock(null)}>
+      <ResizableDrawer title={dock ? `${dock.version} · 对接 AI` : ""} open={!!dock} width={560} minWidth={400} onClose={() => setDock(null)}>
         {dock ? (
           <>
             <Typography.Paragraph type="secondary">
@@ -253,7 +344,60 @@ curl -H "Authorization: Bearer pkm_..." \\
             </Space>
           </>
         ) : null}
-      </Drawer>
+      </ResizableDrawer>
+
+      <Modal
+        title={diffTo ? `对照 ${diffTo.version}` : "版本对照"}
+        open={!!diffTo}
+        onCancel={() => setDiffTo(null)}
+        footer={null}
+        width={720}
+      >
+        <div className="pkm-muted" style={{ marginBottom: 8 }}>
+          对比基准
+        </div>
+        <Select
+          style={{ width: "100%", marginBottom: 12 }}
+          allowClear
+          placeholder="上一版（不选则自动取更早一版）"
+          value={againstId}
+          options={rows.filter((item) => item.id !== diffTo?.id).map((item) => ({ value: item.id, label: `${item.version} ${item.name || ""}`.trim() }))}
+          onChange={(value) => {
+            setAgainstId(value);
+            if (diffTo) loadDiff(diffTo.id, value);
+          }}
+        />
+        {diffLoading ? (
+          <Alert type="info" showIcon message="正在对照…" />
+        ) : diff ? (
+          <>
+            <Alert
+              type={(diff.added.length || diff.removed.length || diff.changed.length) ? "warning" : "success"}
+              showIcon
+              message={diff.from ? `${diff.from.version} → ${diff.to.version}` : `没有更早版本，${diff.to.version} 为当前对照目标`}
+              description={`新增 ${diff.added.length} · 减少 ${diff.removed.length} · 正文变化 ${diff.changed.length}`}
+            />
+            {(diff.added.length || diff.removed.length || diff.changed.length) ? (
+              <Table
+                style={{ marginTop: 12 }}
+                size="small"
+                pagination={false}
+                rowKey={(row) => `${row.kind}-${row.id}`}
+                dataSource={[
+                  ...diff.added.map((item) => ({ ...item, kind: "新增" })),
+                  ...diff.removed.map((item) => ({ ...item, kind: "减少" })),
+                  ...diff.changed.map((item) => ({ ...item, kind: "变化" })),
+                ]}
+                columns={[
+                  { title: "变化", dataIndex: "kind", width: 80 },
+                  { title: "对象", dataIndex: "type_id", width: 100 },
+                  { title: "切片", dataIndex: "title" },
+                ]}
+              />
+            ) : null}
+          </>
+        ) : null}
+      </Modal>
     </div>
   );
 }

@@ -74,21 +74,29 @@ export default function EntityDetailPage() {
       <Card title="关联对象">
         <Table
           rowKey={(r) => `${r.to_id || r.from_id}-${r.relation}`}
+          className="pkm-data-table"
+          tableLayout="fixed"
+          scroll={{ x: 560 }}
           pagination={false}
           dataSource={entity.refs}
           columns={[
-            { title: "方向", render: (_, r) => (r.direction === "in" ? "被引用" : "引用") },
-            { title: "对象", render: (_, r) => r.to_name || r.from_name },
-            { title: "类型", render: (_, r) => r.to_type_id || r.from_type_id },
-            { title: "关系", dataIndex: "relation" },
+            { title: "方向", width: 88, render: (_, r) => (r.direction === "in" ? "被引用" : "引用") },
+            { title: "对象", ellipsis: true, render: (_, r) => r.to_name || r.from_name },
+            { title: "类型", width: 100, render: (_, r) => r.to_type_id || r.from_type_id },
+            { title: "关系", dataIndex: "relation", width: 100, ellipsis: true },
             {
               title: "操作",
+              width: 72,
+              align: "right",
+              className: "pkm-table-ops-cell",
               render: (_, r) => {
                 const target = r.to_id || r.from_id;
                 return target ? (
-                  <Button type="link" onClick={() => navigate(`/entity/${target}`)}>
-                    查看
-                  </Button>
+                  <div className="pkm-table-ops">
+                    <Button type="link" onClick={() => navigate(`/entity/${target}`)}>
+                      查看
+                    </Button>
+                  </div>
                 ) : null;
               },
             },

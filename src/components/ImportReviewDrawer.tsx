@@ -1,4 +1,5 @@
-import { Alert, Button, Drawer, Modal, Popconfirm, Space, Table, Tag, message } from "antd";
+import { Alert, Button, Modal, Popconfirm, Space, Table, Tag, message } from "antd";
+import ResizableDrawer from "./ResizableDrawer";
 import { useEffect, useMemo, useState } from "react";
 import { api, KnowledgeType } from "../api";
 import { KnowledgeSnapshot, mergeNonBlank } from "../knowledgeCompare";
@@ -121,12 +122,15 @@ export default function ImportReviewDrawer({ open, preview, onClose, onApplied }
   const compareType = compareRow ? typeMap[compareRow.type_id] : null;
 
   return (
-    <Drawer
+    <ResizableDrawer
       title="导入对照"
       open={open}
       onClose={onClose}
       width={920}
+      minWidth={480}
       destroyOnClose
+      maskClosable={false}
+      keyboard={false}
       extra={
         <Space>
           <Button onClick={onClose}>取消</Button>
@@ -197,11 +201,15 @@ export default function ImportReviewDrawer({ open, preview, onClose, onApplied }
                   },
                   {
                     title: "操作",
-                    width: 100,
+                    width: 80,
+                    align: "right",
+                    className: "pkm-table-ops-cell",
                     render: (_: unknown, row: ImportUpdate) => (
-                      <Button type="link" onClick={() => setCompareRow(row)}>
-                        比较
-                      </Button>
+                      <div className="pkm-table-ops">
+                        <Button type="link" onClick={() => setCompareRow(row)}>
+                          比较
+                        </Button>
+                      </div>
                     ),
                   },
                 ]}
@@ -228,6 +236,8 @@ export default function ImportReviewDrawer({ open, preview, onClose, onApplied }
         footer={null}
         width={980}
         destroyOnClose
+        maskClosable={false}
+        keyboard={false}
       >
         {compareRow && compareType ? (
           <KnowledgeCompare
@@ -249,6 +259,6 @@ export default function ImportReviewDrawer({ open, preview, onClose, onApplied }
           <div className="pkm-muted">缺少对象类型定义，无法对照。</div>
         )}
       </Modal>
-    </Drawer>
+    </ResizableDrawer>
   );
 }

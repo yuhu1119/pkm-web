@@ -37,8 +37,11 @@ export default function GraphPage() {
 
   useEffect(() => {
     api.get("/api/graph", { params: model ? { model_code: model } : {} }).then((res) => {
-      setNodes(res.data.nodes);
-      setEdges(res.data.edges);
+      setNodes(res.data?.nodes || []);
+      setEdges(res.data?.edges || []);
+    }).catch(() => {
+      setNodes([]);
+      setEdges([]);
     });
   }, [model, current?.id]);
 

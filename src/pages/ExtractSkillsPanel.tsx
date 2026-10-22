@@ -1,23 +1,39 @@
-import { Button, Card, Checkbox, Form, Input, Modal, Select, Space, Table, Tag, Typography, message } from "antd";
+import { Button, Card, Checkbox, Dropdown, Form, Input, Modal, Select, Space, Table, Tag, Timeline, Typography, message } from "antd";
+import { QueryForm, ResultTable } from "../components/SearchTable";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, downloadAuth } from "../api";
 import { useAuth } from "../auth";
 import { KNOWLEDGE_MODELS } from "../paths";
+import { FIELD_TYPE_OPTIONS, columnsFromHint } from "../components/FieldTableInput";
+
+const ACTION_LABEL: Record<string, string> = {
+  save: "保存覆盖",
+  reset: "恢复默认",
+  create: "首次覆盖",
+};
+
+const SKILL_DOWNLOADS = [
+  { fmt: "md", label: "Markdown", ext: "md" },
+  { fmt: "xlsx", label: "Excel", ext: "xlsx" },
+  { fmt: "docx", label: "Word", ext: "docx" },
+];
 
 /**
- * 解析技能配置台：全局原则、文档种类、对象类型。
- * 对象字段可在此调整，治理详情与 AI 抽取共用。
+ * 解析技能配置台：提示词槽位、全局原则、文档种类、对象类型。
+ * 大模型分析不写死限制；范围与要求从这里注入，治理详情与抽取共用字段。
  */
 export default function ExtractSkillsPanel() {
   const { user } = useAuth();
   const [params] = useSearchParams();
   const [data, setData] = useState<any>(null);
   const [keyword, setKeyword] = useState("");
+  const [queryForm] = Form.useForm();
   const [editing, setEditing] = useState<any>(null);
   const [fieldRows, setFieldRows] = useState<any[]>([]);
   const [hiddenKeys, setHiddenKeys] = useState<string[]>([]);
   const [form] = Form.useForm();
+  const [history, setHistory] = useState<any[]>([]);
   const openedQuery = useRef(false);
   const canEdit = user?.role !== "viewer";
 
@@ -45,6 +61,18 @@ export default function ExtractSkillsPanel() {
   }, [data, keyword]);
 
   /**
+   * 拉取某条技能的变更历史。
+   * @param {string} kind
+   * @param {string} [refKey]
+   */
+  const loadHistory = (kind: string, refKey = "") => {
+    api
+      .get("/api/extract-skills/history", { params: { kind, ref_key: refKey } })
+      .then((res) => setHistory(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setHistory([]));
+  };
+
+  /**
    * 打开编辑弹窗。
    * @param {any} payload
    */
@@ -57,6 +85,7 @@ export default function ExtractSkillsPanel() {
       examples: payload.examples || "",
       focus_model_codes: payload.focus_model_codes || [],
     });
+    loadHistory(payload.kind, payload.ref_key || "");
   };
 
   /**
@@ -96,6 +125,29 @@ export default function ExtractSkillsPanel() {
   }, [data, params]);
 
   /**
+   * 下载对象技能。支持 Markdown / Excel / Word。
+   * @param {string} typeId
+   * @param {string} name
+   * @param {string} fmt
+   */
+  const downloadType = (typeId: string, name: string, fmt: string) => {
+    const item = SKILL_DOWNLOADS.find((row) => row.fmt === fmt) || SKILL_DOWNLOADS[1];
+    downloadAuth(
+      `/api/extract-skills/types/${typeId}/download?fmt=${item.fmt}`,
+      `${typeId}-${name || "技能"}.${item.ext}`,
+    );
+  };
+
+  /**
+   * 下载全部对象技能。
+   * @param {string} fmt
+   */
+  const downloadAll = (fmt: string) => {
+    const item = SKILL_DOWNLOADS.find((row) => row.fmt === fmt) || SKILL_DOWNLOADS[1];
+    downloadAuth(`/api/extract-skills/download/types?fmt=${item.fmt}`, `对象类型技能.${item.ext}`);
+  };
+
+  /**
    * 保存覆盖。
    */
   const save = async (values: any) => {
@@ -114,14 +166,32 @@ export default function ExtractSkillsPanel() {
   };
 
   /**
-   * 恢复默认。
-   * @param {string} kind
-   * @param {string} [refKey]
+   * 把编辑框填回系统默认，不立刻写库。
    */
-  const reset = async (kind: string, refKey = "") => {
-    await api.delete("/api/extract-skills", { params: { kind, ref_key: refKey } });
-    message.success("已恢复默认");
-    load();
+  const applyDefaultsToForm = () => {
+    if (!editing) return;
+    form.setFieldsValue({
+      instruction: editing.default_instruction || "",
+      examples: editing.default_examples || "",
+      focus_model_codes: editing.default_focus_model_codes || [],
+    });
+    if (editing.kind === "type") {
+      setFieldRows((editing.catalog_fields || []).map((item: any) => ({ ...item })));
+      setHiddenKeys([]);
+    }
+  };
+
+  /**
+   * 二次确认后，仅回填默认文字。
+   */
+  const confirmRestore = () => {
+    Modal.confirm({
+      title: "恢复默认？",
+      content: "编辑框将填入系统默认文字，需点「保存覆盖」后才对本账号生效，不影响其他用户。",
+      okText: "填入默认",
+      cancelText: "取消",
+      onOk: applyDefaultsToForm,
+    });
   };
 
   if (!data) return null;
@@ -130,24 +200,53 @@ export default function ExtractSkillsPanel() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <Card title="抽取提示词">
+        <p className="pkm-muted">
+          每位用户看到的默认内容相同。你保存的覆盖只作用于自己的抽取，不影响其他人。系统提示词、输出格式、补空字段与来源说明改完保存后，下次抽取即生效。
+        </p>
+        <Table
+          rowKey="key"
+          size="small"
+          pagination={false}
+          dataSource={data.prompts || []}
+          columns={[
+            { title: "槽位", dataIndex: "title", width: 160 },
+            { title: "说明", dataIndex: "hint", ellipsis: true },
+            {
+              title: "来源",
+              width: 90,
+              render: (_: unknown, row: any) => (row.is_default ? <Tag>默认</Tag> : <Tag color="blue">已覆盖</Tag>),
+            },
+            {
+              title: "操作",
+              width: 80,
+              render: (_: unknown, row: any) =>
+                canEdit ? (
+                  <Button type="link" onClick={() => openEdit({ kind: "prompt", ref_key: row.key, ...row })}>
+                    编辑
+                  </Button>
+                ) : null,
+            },
+          ]}
+        />
+      </Card>
+
       <Card
         title="全局解析原则"
         extra={data.global?.is_default ? <Tag>默认</Tag> : <Tag color="blue">已覆盖</Tag>}
       >
+        <p className="pkm-muted">每次抽取都会注入。写通用分析能力即可，按文档种类或对象收窄请改下面两类技能。</p>
         <pre className="pkm-code">{data.global?.instruction}</pre>
         {canEdit ? (
-          <Space style={{ marginTop: 12 }}>
-            <Button onClick={() => openEdit({ kind: "global", ref_key: "", instruction: data.global.instruction, examples: "" })}>
-              编辑
-            </Button>
-            {!data.global?.is_default ? <Button onClick={() => reset("global")}>恢复默认</Button> : null}
-          </Space>
+          <Button style={{ marginTop: 12 }} onClick={() => openEdit({ kind: "global", ref_key: "", ...data.global })}>
+            编辑
+          </Button>
         ) : null}
       </Card>
 
       <Card title="文档种类技能">
         <p className="pkm-muted">
-          上传文档时按种类选用。扫描会参考这些原则判断覆盖范围；抽取时会带上本类优先关联的对象类型及其治理字段。
+          按文档来源注入：识别为 PRD、手册、接口或培训后，把本类原则和优先模型交给大模型。改这里就能调整该类文档的分析目标。
         </p>
         <Table
           rowKey="key"
@@ -173,44 +272,48 @@ export default function ExtractSkillsPanel() {
             },
             {
               title: "操作",
-              width: 140,
+              width: 80,
               render: (_: unknown, row: any) =>
                 canEdit ? (
-                  <Space>
-                    <Button type="link" onClick={() => openEdit({ kind: "document_kind", ref_key: row.key, ...row })}>
-                      编辑
-                    </Button>
-                    {!row.is_default ? (
-                      <Button type="link" onClick={() => reset("document_kind", row.key)}>
-                        恢复
-                      </Button>
-                    ) : null}
-                  </Space>
+                  <Button type="link" onClick={() => openEdit({ kind: "document_kind", ref_key: row.key, ...row })}>
+                    编辑
+                  </Button>
                 ) : null,
             },
           ]}
         />
       </Card>
 
-      <Card
-        title="对象类型技能"
-        extra={
-          <Space>
-            <Input.Search allowClear placeholder="编号 / 名称" onSearch={setKeyword} style={{ width: 220 }} />
-            <Button onClick={() => downloadAuth("/api/extract-skills/download/types", "对象类型技能.csv")}>
-              下载全部 Excel
-            </Button>
-          </Space>
-        }
+      <div className="pkm-search-stack">
+      <p className="pkm-muted" style={{ marginBottom: 8 }}>
+        按对象范围注入：抽取某类对象时带上该对象的原则、正反例和治理字段。改形态、表头、填写说明或抽取原则后需保存，下载 Word / Markdown / Excel 会按当前技能生成。表格形态在文档里出表，多行出段落。
+      </p>
+      <QueryForm
+        form={queryForm}
+        onSearch={() => setKeyword(String(queryForm.getFieldValue("q") || "").trim())}
+        onReset={() => {
+          queryForm.resetFields();
+          setKeyword("");
+        }}
       >
-        <Typography.Paragraph type="secondary">
-          78 类对象固定。每个对象的字段可改标签、必填、填写说明，也可隐藏或新增。保存后，治理详情和 AI 抽文档都用这张表。
-        </Typography.Paragraph>
-        <Table
+        <Form.Item name="q" label="对象">
+          <Input allowClear placeholder="请输入编号 / 名称" />
+        </Form.Item>
+      </QueryForm>
+      <ResultTable
           rowKey="type_id"
-          size="small"
-          pagination={{ pageSize: 12 }}
           dataSource={types}
+          onRefresh={load}
+          operations={
+            <Dropdown
+              menu={{
+                items: SKILL_DOWNLOADS.map((item) => ({ key: item.fmt, label: item.label })),
+                onClick: ({ key }) => downloadAll(String(key)),
+              }}
+            >
+              <Button>下载全部</Button>
+            </Dropdown>
+          }
           columns={[
             { title: "编号", dataIndex: "type_id", width: 100 },
             { title: "对象", dataIndex: "name" },
@@ -239,28 +342,22 @@ export default function ExtractSkillsPanel() {
             },
             {
               title: "操作",
-              width: 200,
+              key: "operations",
+              hideable: false,
+              width: 220,
               render: (_: unknown, row: any) => (
                 <Space>
-                  <Button
-                    type="link"
-                    onClick={() =>
-                      downloadAuth(
-                        `/api/extract-skills/types/${row.type_id}/download`,
-                        `${row.type_id}-${row.name || "技能"}.csv`,
-                      )
-                    }
+                  <Dropdown
+                    menu={{
+                      items: SKILL_DOWNLOADS.map((item) => ({ key: item.fmt, label: item.label })),
+                      onClick: ({ key }) => downloadType(row.type_id, row.name || "技能", String(key)),
+                    }}
                   >
-                    下载
-                  </Button>
+                    <Button type="link">下载</Button>
+                  </Dropdown>
                   {canEdit ? (
                     <Button type="link" onClick={() => openEdit({ kind: "type", ref_key: row.type_id, ...row })}>
                       编辑
-                    </Button>
-                  ) : null}
-                  {canEdit && !row.is_default ? (
-                    <Button type="link" onClick={() => reset("type", row.type_id)}>
-                      恢复
                     </Button>
                   ) : null}
                 </Space>
@@ -268,7 +365,7 @@ export default function ExtractSkillsPanel() {
             },
           ]}
         />
-      </Card>
+      </div>
 
       <Modal
         title={
@@ -276,15 +373,41 @@ export default function ExtractSkillsPanel() {
             ? `对象技能 · ${editing.type_id || ""} ${editing.name || ""}`
             : editing?.kind === "document_kind"
               ? `文档种类 · ${editing.title || ""}`
-              : "编辑抽取技能"
+              : editing?.kind === "prompt"
+                ? `抽取提示词 · ${editing.title || ""}`
+                : "编辑抽取技能"
         }
         open={!!editing}
         width={editing?.kind === "type" ? 1040 : editing?.kind === "document_kind" ? 880 : 720}
-        onCancel={() => setEditing(null)}
-        onOk={() => form.submit()}
-        okText="保存覆盖"
-        okButtonProps={{ disabled: !canEdit }}
+        onCancel={() => {
+          setEditing(null);
+          setHistory([]);
+        }}
+        footer={[
+          canEdit ? (
+            <Button key="restore" onClick={confirmRestore}>
+              恢复默认
+            </Button>
+          ) : null,
+          <Button
+            key="cancel"
+            onClick={() => {
+              setEditing(null);
+              setHistory([]);
+            }}
+          >
+            取消
+          </Button>,
+          <Button key="ok" type="primary" disabled={!canEdit} onClick={() => form.submit()}>
+            保存覆盖
+          </Button>,
+        ]}
       >
+        {canEdit ? (
+          <p className="pkm-muted" style={{ marginBottom: 12 }}>
+            「恢复默认」只改当前编辑框，点「保存覆盖」后才对本账号生效。
+          </p>
+        ) : null}
         {editing?.kind === "type" ? (
           <div style={{ marginBottom: 16 }}>
             <div className="pkm-muted">{editing.core_question}</div>
@@ -381,14 +504,35 @@ export default function ExtractSkillsPanel() {
                       value={row.type || "textarea"}
                       disabled={!canEdit}
                       style={{ width: 100 }}
-                      onChange={(value) => patchField(index, { type: value })}
-                      options={[
-                        { value: "text", label: "单行" },
-                        { value: "textarea", label: "多行" },
-                        { value: "select", label: "选项" },
-                      ]}
+                      onChange={(value) => {
+                        const patch: Record<string, unknown> = { type: value };
+                        if (value === "table" && !(row.options || []).length) {
+                          const cols = columnsFromHint(row.fill_hint || "");
+                          patch.options = cols.length ? cols : ["列1", "列2"];
+                        }
+                        patchField(index, patch);
+                      }}
+                      options={FIELD_TYPE_OPTIONS}
                     />
                   ),
+                },
+                {
+                  title: "选项/表头",
+                  width: 200,
+                  render: (_: unknown, row: any, index: number) =>
+                    row.type === "select" || row.type === "table" ? (
+                      <Select
+                        mode="tags"
+                        value={row.options || []}
+                        disabled={!canEdit}
+                        style={{ width: "100%" }}
+                        placeholder={row.type === "table" ? "表头，回车添加" : "选项，回车添加"}
+                        tokenSeparators={[",", "，", "、"]}
+                        onChange={(value) => patchField(index, { options: value })}
+                      />
+                    ) : (
+                      <span className="pkm-muted">—</span>
+                    ),
                 },
                 {
                   title: "填写说明",
@@ -422,6 +566,11 @@ export default function ExtractSkillsPanel() {
             />
           </div>
         ) : null}
+        {editing?.kind === "prompt" && editing.hint ? (
+          <div className="pkm-muted" style={{ marginBottom: 12 }}>
+            {editing.hint}
+          </div>
+        ) : null}
         {editing?.kind === "document_kind" ? (
           <div style={{ marginBottom: 16 }}>
             <div className="pkm-muted">抽取时会带上这些对象类型的治理字段，与详情页一致。</div>
@@ -443,7 +592,13 @@ export default function ExtractSkillsPanel() {
         <Form form={form} layout="vertical" onFinish={save}>
           <Form.Item
             name="instruction"
-            label={editing?.kind === "type" ? "抽取原则（字段以上表为准）" : "抽取原则 / 字段要求"}
+            label={
+              editing?.kind === "type"
+                ? "抽取原则（字段以上表为准）"
+                : editing?.kind === "prompt"
+                  ? "提示词正文"
+                  : "抽取原则 / 字段要求"
+            }
             rules={[{ required: true }]}
           >
             <Input.TextArea rows={editing?.kind === "type" ? 6 : 10} />
@@ -460,6 +615,28 @@ export default function ExtractSkillsPanel() {
             </Form.Item>
           ) : null}
         </Form>
+        {history.length ? (
+          <div style={{ marginTop: 16 }}>
+            <Typography.Text type="secondary">变更历史</Typography.Text>
+            <Timeline
+              style={{ marginTop: 12, maxHeight: 220, overflow: "auto" }}
+              items={history.map((item: any) => ({
+                children: (
+                  <div>
+                    <div>
+                      {ACTION_LABEL[item.action] || item.action} · {item.changed_by || "—"} · {item.created_at || ""}
+                    </div>
+                    {item.instruction ? (
+                      <Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ marginBottom: 0 }}>
+                        {item.instruction}
+                      </Typography.Paragraph>
+                    ) : null}
+                  </div>
+                ),
+              }))}
+            />
+          </div>
+        ) : null}
       </Modal>
     </Space>
   );

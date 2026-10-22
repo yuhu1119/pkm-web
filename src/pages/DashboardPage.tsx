@@ -1,5 +1,6 @@
 import { CloudSyncOutlined, ExperimentOutlined, PartitionOutlined } from "@ant-design/icons";
-import { Button, Card, Space, Table, Tag } from "antd";
+import { Button, Space, Tag } from "antd";
+import { ResultTable } from "../components/SearchTable";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
@@ -29,8 +30,14 @@ export default function DashboardPage() {
   const base = current?.id ? workspacePath(current.id) : "/products";
 
   const load = () => {
-    api.get("/api/dashboard").then((res) => setData(res.data));
-    api.get("/api/entities").then((res) => setRecent((res.data || []).slice(0, 8)));
+    api
+      .get("/api/dashboard")
+      .then((res) => setData(res.data))
+      .catch(() => setData({ product: current || { name: "产品" }, coverage: [], type_total: 0, type_governed: 0, type_incomplete: 0, type_extracted: 0, type_sourced: 0, entity_total: 0 }));
+    api
+      .get("/api/entities", { params: { limit: 8 } })
+      .then((res) => setRecent((res.data || []).slice(0, 8)))
+      .catch(() => setRecent([]));
   };
 
   useEffect(() => {
@@ -47,7 +54,7 @@ export default function DashboardPage() {
     {
       path: `${base}/sources`,
       title: "知识收集",
-      desc: "完整 PRD / 手册在这里做全局分析。对象专项材料请到对应类型下单独上传。",
+      desc: "一次上传多篇资料，勾选后整库分析。知识库有内容后，新文档点「更新知识库」只改相关对象。",
       icon: <CloudSyncOutlined />,
     },
     {
@@ -58,8 +65,8 @@ export default function DashboardPage() {
     },
     {
       path: `${base}/pack`,
-      title: "模型投喂",
-      desc: "预览模型会读到的输入并试问命中切片。正式下载与对接请打成知识版本。",
+      title: "投喂预览",
+      desc: "核对已治理知识拼给模型的输入，并试问命中切片。",
       icon: <ExperimentOutlined />,
     },
   ];
@@ -111,9 +118,9 @@ export default function DashboardPage() {
       </div>
 
       <div className="pkm-section-title">十模型覆盖率</div>
-      <Card bodyStyle={{ padding: 0 }}>
-        <Table
+      <ResultTable<Coverage>
           rowKey="model_code"
+          showIndex={false}
           pagination={false}
           dataSource={data.coverage as Coverage[]}
           columns={[
@@ -149,22 +156,20 @@ export default function DashboardPage() {
             },
             {
               title: "操作",
+              key: "operations",
+              hideable: false,
               render: (_, row) => (
                 <Button type="link" onClick={() => navigate(`${base}/knowledge/${row.model_code}`)}>
-                  进入治理
+                  查看
                 </Button>
               ),
             },
           ]}
         />
-      </Card>
 
       <div className="pkm-section-title">最近更新</div>
-      <Card bodyStyle={{ padding: 0 }}>
-        <Table
+      <ResultTable
           rowKey="id"
-          size="small"
-          pagination={false}
           dataSource={recent}
           columns={[
             { title: "实例", dataIndex: "name" },
@@ -174,7 +179,6 @@ export default function DashboardPage() {
             { title: "时间", dataIndex: "updated_at" },
           ]}
         />
-      </Card>
     </div>
   );
 }

@@ -2,6 +2,8 @@ import {
   ApartmentOutlined,
   AppstoreOutlined,
   ArrowLeftOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
   MoonOutlined,
   SunOutlined,
   CloudSyncOutlined,
@@ -24,11 +26,11 @@ import {
   ThunderboltOutlined,
 } from "@ant-design/icons";
 import { PageContainer, ProLayout } from "@ant-design/pro-components";
-import { Avatar, Dropdown, Tooltip } from "antd";
-import { useEffect } from "react";
+import { Avatar, Breadcrumb, Dropdown, Tooltip } from "antd";
+import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api";
-import { useAuth } from "../auth";
+import { isAdmin, useAuth } from "../auth";
 import { KNOWLEDGE_MODELS, parseWorkspaceProductId, workspacePath } from "../paths";
 import { useProduct } from "../product";
 import { layoutToken, useTheme } from "../theme";
@@ -49,17 +51,21 @@ const MODEL_ICONS = [
 ];
 
 /**
- * 平台一级菜单：全部平铺，且每项都有图标。
+ * 平台一级菜单：技能配置对每位登录用户开放；系统设置仅管理员可见。
+ * @param {boolean} admin
  */
-function platformRoutes() {
-  return [
+function platformRoutes(admin: boolean) {
+  const routes = [
     { path: "/", name: "首页", icon: <HomeOutlined /> },
+    { path: "/products", name: "产品", icon: <AppstoreOutlined /> },
     { path: "/landscape", name: "知识全景", icon: <GlobalOutlined /> },
-    { path: "/products", name: "产品管理", icon: <AppstoreOutlined /> },
     { path: "/apps", name: "知识应用", icon: <ApiOutlined /> },
     { path: "/skills", name: "技能配置", icon: <ThunderboltOutlined /> },
-    { path: "/settings", name: "系统设置", icon: <SettingOutlined /> },
   ];
+  if (admin) {
+    routes.push({ path: "/settings", name: "系统设置", icon: <SettingOutlined /> });
+  }
+  return routes;
 }
 
 /**
@@ -68,11 +74,11 @@ function platformRoutes() {
 function workspaceRoutes(productId: number) {
   return [
     { path: "/products", name: "全部产品", icon: <ArrowLeftOutlined /> },
-    { path: workspacePath(productId, "/overview"), name: "知识概览", icon: <FundProjectionScreenOutlined /> },
-    { path: workspacePath(productId, "/sources"), name: "知识收集", icon: <CloudSyncOutlined /> },
+    { path: workspacePath(productId, "/overview"), name: "概览", icon: <FundProjectionScreenOutlined /> },
+    { path: workspacePath(productId, "/sources"), name: "收集", icon: <CloudSyncOutlined /> },
     {
       path: workspacePath(productId, "/knowledge"),
-      name: "知识治理",
+      name: "治理",
       icon: <ApartmentOutlined />,
       routes: KNOWLEDGE_MODELS.map((item, index) => ({
         path: workspacePath(productId, `/knowledge/${item.code}`),
@@ -80,9 +86,9 @@ function workspaceRoutes(productId: number) {
         icon: MODEL_ICONS[index],
       })),
     },
+    { path: workspacePath(productId, "/structure"), name: "图谱", icon: <PartitionOutlined /> },
     { path: workspacePath(productId, "/relations"), name: "功能与关系", icon: <ShareAltOutlined /> },
-    { path: workspacePath(productId, "/structure"), name: "知识图谱", icon: <PartitionOutlined /> },
-    { path: workspacePath(productId, "/pack"), name: "模型投喂", icon: <ExperimentOutlined /> },
+    { path: workspacePath(productId, "/pack"), name: "投喂预览", icon: <ExperimentOutlined /> },
   ];
 }
 
@@ -91,25 +97,59 @@ function workspaceRoutes(productId: number) {
  * @param {string} pathname
  */
 function visitTitle(pathname: string) {
-  if (pathname === "/") return "首页";
+  if (pathname === "/" || pathname === "/ask") return "首页";
   if (pathname.startsWith("/landscape") || pathname.startsWith("/panorama")) return "知识全景";
-  if (pathname === "/products") return "产品管理";
+  if (pathname === "/products") return "产品";
   if (pathname === "/apps") return "知识应用";
   if (pathname === "/skills") return "技能配置";
   if (pathname === "/settings") return "系统设置";
-  if (pathname === "/ask") return "知识问答";
-  if (pathname.includes("/overview")) return "知识概览";
-  if (pathname.includes("/sources")) return "知识收集";
-  if (pathname.includes("/knowledge")) return "知识治理";
+  if (pathname.includes("/overview")) return "概览";
+  if (pathname.includes("/sources")) return "收集";
+  if (pathname.includes("/knowledge")) return "治理";
   if (pathname.includes("/relations")) return "功能与关系";
-  if (pathname.includes("/structure") || pathname.includes("/graph")) return "知识图谱";
-  if (pathname.includes("/pack")) return "模型投喂";
+  if (pathname.includes("/structure") || pathname.includes("/graph")) return "图谱";
+  if (pathname.includes("/pack")) return "投喂预览";
   if (pathname.includes("/search")) return "检索";
   return pathname;
 }
 
 /**
- * 平台主框架：顶栏品牌 + 平铺侧栏，内容区大留白。
+ * 按当前路由生成面包屑。工作台带产品名，知识治理带模型名。
+ * @param {string} pathname
+ * @param {string} [productName]
+ */
+function pageCrumbs(pathname: string, productName?: string) {
+  const item = (title: string, path?: string) => ({
+    title: path ? <Link to={path}>{title}</Link> : title,
+  });
+  if (pathname === "/" || pathname === "/ask") return [item("首页")];
+  if (pathname === "/landscape") return [item("知识全景")];
+  if (pathname === "/apps") return [item("知识应用")];
+  if (pathname === "/products") return [item("产品")];
+  if (pathname === "/skills") return [item("技能配置")];
+  if (pathname === "/settings") return [item("系统设置")];
+  const productId = parseWorkspaceProductId(pathname);
+  if (!productId) return [item(visitTitle(pathname))];
+  const rest = pathname.slice(`/products/${productId}`.length) || "";
+  const product = item(productName || "产品工作台", workspacePath(productId, "/overview"));
+  const manage = item("产品", "/products");
+  if (rest === "" || rest === "/" || rest === "/overview") return [manage, product, item("概览")];
+  if (rest === "/sources") return [manage, product, item("收集")];
+  if (rest === "/relations") return [manage, product, item("功能与关系")];
+  if (rest === "/structure" || rest === "/graph") return [manage, product, item("图谱")];
+  if (rest === "/pack") return [manage, product, item("投喂预览")];
+  if (rest === "/search") return [manage, product, item("检索")];
+  const knowledge = rest.match(/^\/knowledge\/(\d+)$/);
+  if (knowledge) {
+    const model = KNOWLEDGE_MODELS.find((row) => String(row.code) === knowledge[1]);
+    return [manage, product, item("治理", workspacePath(productId, "/knowledge/1")), item(model?.name || "对象列表")];
+  }
+  if (rest.startsWith("/knowledge")) return [manage, product, item("治理")];
+  return [manage, product];
+}
+
+/**
+ * 平台主框架：顶栏品牌 + 侧栏，内容区面包屑与查询表格边距。
  */
 export default function AppLayout() {
   const location = useLocation();
@@ -117,19 +157,22 @@ export default function AppLayout() {
   const { user, logout } = useAuth();
   const { current: currentProduct } = useProduct();
   const { mode, toggle, palette } = useTheme();
+  const [collapsed, setCollapsed] = useState(false);
   const productId = parseWorkspaceProductId(location.pathname);
   const inWorkspace = !!productId;
+  const isHome = location.pathname === "/" || location.pathname === "/ask";
   const fullBleed =
     location.pathname.includes("/structure") ||
     location.pathname.includes("/graph") ||
     location.pathname.startsWith("/landscape") ||
     location.pathname.startsWith("/panorama");
-  const isHome = location.pathname === "/";
   const knowledgeMenu = productId ? workspacePath(productId, "/knowledge") : "";
   const openKeys = inWorkspace ? [knowledgeMenu].filter(Boolean) : [];
-  const selectedKeys = location.pathname.includes("/graph") && productId
-    ? [workspacePath(productId, "/structure")]
-    : [location.pathname];
+  const structurePath = productId ? workspacePath(productId, "/structure") : "";
+  const selectedKeys =
+    (location.pathname.includes("/graph") || location.pathname.includes("/structure")) && structurePath
+      ? [structurePath]
+      : [location.pathname === "/ask" ? "/" : location.pathname];
 
   useEffect(() => {
     if (!user) return;
@@ -144,8 +187,22 @@ export default function AppLayout() {
       splitMenus={false}
       logo={false}
       menuHeaderRender={false}
+      collapsed={collapsed}
+      onCollapse={setCollapsed}
+      breakpoint={false}
+      disableMobile
       collapsedButtonRender={false}
-      siderWidth={232}
+      menuFooterRender={() => (
+        <button
+          type="button"
+          className="pkm-sider-collapse"
+          onClick={() => setCollapsed((value) => !value)}
+          aria-label={collapsed ? "展开菜单" : "收起菜单"}
+        >
+          {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+        </button>
+      )}
+      siderWidth={220}
       fixSiderbar
       fixedHeader
       location={location}
@@ -157,14 +214,18 @@ export default function AppLayout() {
         </button>
       )}
       menuItemRender={(item, dom) => <Link to={item.path || "/"}>{dom}</Link>}
+      subMenuItemRender={(item, dom) => (item.path ? <Link to={item.path}>{dom}</Link> : dom)}
       menuProps={{
         openKeys,
         selectedKeys,
         onOpenChange: () => undefined,
+        onClick: ({ key }) => {
+          if (typeof key === "string" && key.startsWith("/")) navigate(key);
+        },
       }}
       route={{
         path: "/",
-        routes: inWorkspace && productId ? workspaceRoutes(productId) : platformRoutes(),
+        routes: inWorkspace && productId ? workspaceRoutes(productId) : platformRoutes(isAdmin(user)),
       }}
       actionsRender={() => [
         <Tooltip key="theme" title={mode === "dark" ? "切换到浅色" : "切换到深色"}>
@@ -185,7 +246,7 @@ export default function AppLayout() {
               onClick: ({ key }) => key === "logout" && logout(),
             }}
           >
-            <Avatar size={28} style={{ background: palette.primary, color: palette.bg, cursor: "pointer", fontSize: 12 }}>
+            <Avatar size={28} style={{ background: palette.primary, color: "#fff", cursor: "pointer", fontSize: 12 }}>
               {(user?.display_name || user?.username || "?").slice(0, 1)}
             </Avatar>
           </Dropdown>
@@ -196,13 +257,18 @@ export default function AppLayout() {
     >
       <WorkspaceProvider>
         <PageContainer
-          className={fullBleed ? "pkm-pano-page" : isHome ? "pkm-home-page" : undefined}
-          breadcrumbRender={false}
+          className={[fullBleed ? "pkm-pano-page" : "", isHome ? "pkm-home-page" : ""].filter(Boolean).join(" ") || undefined}
           title={false}
+          pageHeaderRender={false}
         >
-          <PageErrorBoundary resetKey={location.pathname + location.search + String(currentProduct?.id || "")}>
-            <Outlet key={String(productId || "platform")} />
-          </PageErrorBoundary>
+          <div className={`pkm-page${fullBleed ? " is-bleed" : ""}${isHome ? " is-home" : ""}`}>
+            {isHome ? null : <Breadcrumb className="pkm-breadcrumb" items={pageCrumbs(location.pathname, currentProduct?.name)} />}
+            <div className="pkm-page-body">
+              <PageErrorBoundary resetKey={location.pathname + location.search + String(currentProduct?.id || "")}>
+                <Outlet key={String(productId || "platform")} />
+              </PageErrorBoundary>
+            </div>
+          </div>
         </PageContainer>
       </WorkspaceProvider>
     </ProLayout>

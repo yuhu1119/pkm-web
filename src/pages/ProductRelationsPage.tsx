@@ -1,4 +1,5 @@
-import { Button, Card, Form, Input, Popconfirm, Select, Table, Tabs, message } from "antd";
+import { Button, Card, Form, Input, Popconfirm, Select, Tabs, message } from "antd";
+import { ResultTable } from "../components/SearchTable";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
@@ -92,10 +93,10 @@ export default function ProductRelationsPage() {
                 <Button type="link" onClick={() => navigate(workspacePath(id, "/knowledge/2"))}>
                   去模块模型治理
                 </Button>
-                <Table
+                <ResultTable
                   rowKey="id"
-                  size="small"
-                  pagination={false}
+                  showIndex={false}
+                  pagination={features.length > 20 ? undefined : false}
                   dataSource={features}
                   columns={[
                     { title: "类型", dataIndex: "kind", width: 80 },
@@ -149,11 +150,11 @@ export default function ProductRelationsPage() {
                     添加关系
                   </Button>
                 </Form>
-                <Table
+                <ResultTable
                   rowKey="id"
-                  size="small"
-                  pagination={false}
+                  pagination={relations.length > 20 ? undefined : false}
                   dataSource={relations}
+                  operations={null}
                   columns={[
                     { title: "从", dataIndex: "from_name" },
                     { title: "关系", dataIndex: "label", width: 100 },
@@ -161,6 +162,8 @@ export default function ProductRelationsPage() {
                     { title: "说明", dataIndex: "note" },
                     {
                       title: "操作",
+                      key: "operations",
+                      hideable: false,
                       width: 80,
                       render: (_: unknown, row: any) => (
                         <Popconfirm
@@ -216,10 +219,9 @@ function FeatureRelPanel({
       <p className="pkm-muted" style={{ marginBottom: 12 }}>
         功能之间的依赖从知识实例引用同步，不再在这里手画第二遍。跨产品拓扑请用「产品关系」。
       </p>
-      <Table
+      <ResultTable
         rowKey="id"
-        size="small"
-        pagination={false}
+        pagination={rows.length > 20 ? undefined : false}
         dataSource={rows}
         columns={[
           { title: "从", dataIndex: "from_name" },
@@ -227,6 +229,8 @@ function FeatureRelPanel({
           { title: "到", dataIndex: "to_name" },
           {
             title: "操作",
+            key: "operations",
+            hideable: false,
             width: 80,
             render: (_: unknown, row: any) => (
               <Popconfirm title="删除这条投影边？" onConfirm={async () => api.delete(`/api/feature-relations/${row.id}`).then(onChange)}>

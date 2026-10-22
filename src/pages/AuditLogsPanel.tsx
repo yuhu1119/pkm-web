@@ -1,6 +1,7 @@
-import { Card, Input, Select, Space, Table, Tag } from "antd";
+import { Form, Input, Select, Tag } from "antd";
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { QueryForm, ResultTable } from "../components/SearchTable";
 
 const ACTION_META: Record<string, { label: string; color: string }> = {
   login: { label: "登录", color: "green" },
@@ -31,12 +32,18 @@ interface AuditRow {
 }
 
 /**
- * 把 UTC 时间格式化为本地可读时间。
+ * 展示时间。SQLite / now_str 的「2026-10-13 15:20:02」已是本地文本，不能再当 UTC。
+ * 带 Z 或 T 的 ISO 按 UTC 转成本地。
  * @param {string} value
  */
 function formatTime(value: string) {
-  const date = new Date(value.endsWith("Z") ? value : `${value}Z`);
-  if (Number.isNaN(date.getTime())) return value;
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  if (/^\d{4}-\d{2}-\d{2} /.test(raw) && !/[zZ]$/.test(raw) && !/[+-]\d{2}:?\d{2}$/.test(raw)) {
+    return raw.slice(0, 19);
+  }
+  const date = new Date(/[zZ]$/.test(raw) || /[+-]\d{2}:?\d{2}$/.test(raw) ? raw : `${raw}Z`);
+  if (Number.isNaN(date.getTime())) return raw;
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
@@ -48,24 +55,32 @@ export default function AuditLogsPanel() {
   const [items, setItems] = useState<AuditRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [loading, setLoading] = useState(false);
-  const [q, setQ] = useState("");
-  const [action, setAction] = useState<string>();
-  const [username, setUsername] = useState("");
+  const [form] = Form.useForm();
+  const [filters, setFilters] = useState({ q: "", action: undefined as string | undefined, username: "" });
 
   /**
-   * 拉取日志分页。
+   * 拉取日志分页，切页保留当前筛选。
    * @param {number} nextPage
+   * @param {number} [nextSize]
    */
-  const load = async (nextPage = page) => {
+  const load = async (nextPage = page, nextSize = pageSize, nextFilters = filters) => {
     setLoading(true);
     try {
       const res = await api.get("/api/audit-logs", {
-        params: { q: q || undefined, action: action || undefined, username: username || undefined, page: nextPage, page_size: 20 },
+        params: {
+          q: nextFilters.q || undefined,
+          action: nextFilters.action || undefined,
+          username: nextFilters.username || undefined,
+          page: nextPage,
+          page_size: nextSize,
+        },
       });
       setItems(res.data.items || []);
       setTotal(res.data.total || 0);
       setPage(res.data.page || nextPage);
+      setPageSize(nextSize);
     } finally {
       setLoading(false);
     }
@@ -73,51 +88,64 @@ export default function AuditLogsPanel() {
 
   useEffect(() => {
     load(1);
-  }, [action]);
+  }, []);
+
+  /**
+   * 查询：带条件回到第 1 页。
+   */
+  const search = () => {
+    const next = {
+      q: String(form.getFieldValue("q") || "").trim(),
+      username: String(form.getFieldValue("username") || "").trim(),
+      action: form.getFieldValue("action") || undefined,
+    };
+    setFilters(next);
+    load(1, pageSize, next);
+  };
+
+  /**
+   * 重置后立刻按空条件重查。
+   */
+  const reset = () => {
+    form.resetFields();
+    const next = { q: "", action: undefined as string | undefined, username: "" };
+    setFilters(next);
+    load(1, pageSize, next);
+  };
 
   return (
-    <Card>
-      <Space wrap style={{ marginBottom: 16 }}>
-        <Input.Search
-          allowClear
-          placeholder="搜索操作说明或对象"
-          style={{ width: 240 }}
-          onSearch={() => load(1)}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <Input
-          allowClear
-          placeholder="用户名或姓名"
-          style={{ width: 160 }}
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          onPressEnter={() => load(1)}
-        />
-        <Select
-          allowClear
-          placeholder="操作类型"
-          style={{ width: 140 }}
-          value={action}
-          onChange={(value) => setAction(value)}
-          options={Object.entries(ACTION_META).map(([value, item]) => ({ value, label: item.label }))}
-        />
-      </Space>
-      <Table
+    <div className="pkm-search-stack">
+      <QueryForm form={form} loading={loading} onSearch={search} onReset={reset}>
+        <Form.Item name="q" label="说明">
+          <Input allowClear placeholder="请输入操作说明或对象" />
+        </Form.Item>
+        <Form.Item name="username" label="用户">
+          <Input allowClear placeholder="请输入用户名或姓名" />
+        </Form.Item>
+        <Form.Item name="action" label="操作类型">
+          <Select
+            allowClear
+            placeholder="全部"
+            options={Object.entries(ACTION_META).map(([value, item]) => ({ value, label: item.label }))}
+          />
+        </Form.Item>
+      </QueryForm>
+      <ResultTable<AuditRow>
         rowKey="id"
         loading={loading}
         dataSource={items}
+        onRefresh={() => load(page, pageSize)}
         pagination={{
           current: page,
           total,
-          pageSize: 20,
-          showSizeChanger: false,
-          showTotal: (count) => `共 ${count} 条`,
-          onChange: (next) => load(next),
+          pageSize,
+          onChange: (next, size) => load(next, size || pageSize),
         }}
         columns={[
           { title: "时间", dataIndex: "created_at", width: 180, render: (v: string) => formatTime(v) },
           {
             title: "用户",
+            dataIndex: "username",
             width: 180,
             render: (_: unknown, row: AuditRow) => (
               <span>
@@ -127,20 +155,20 @@ export default function AuditLogsPanel() {
             ),
           },
           {
-            title: "操作",
+            title: "操作类型",
             dataIndex: "action",
-            width: 100,
+            width: 110,
             render: (value: string) => {
               const meta = ACTION_META[value] || ACTION_META.other;
               return <Tag color={meta.color}>{meta.label}</Tag>;
             },
           },
-          { title: "模块", dataIndex: "category", width: 80 },
-          { title: "对象", dataIndex: "resource", ellipsis: true },
-          { title: "说明", dataIndex: "summary", ellipsis: true },
+          { title: "模块", dataIndex: "category", width: 88 },
+          { title: "对象", dataIndex: "resource", width: 160, ellipsis: true },
+          { title: "说明", dataIndex: "summary", width: 240, ellipsis: true },
           { title: "IP", dataIndex: "ip", width: 130, render: (v: string) => v || "-" },
         ]}
       />
-    </Card>
+    </div>
   );
 }

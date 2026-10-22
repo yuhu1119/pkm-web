@@ -45,7 +45,7 @@ export default function LandscapePage() {
   const featureIndex = useMemo(() => {
     const map = new Map<number, { productId: number; col: number; row: number; name: string; kind: string; summary: string }>();
     if (!data) return map;
-    data.products.forEach((product: any, col: number) => {
+    (Array.isArray(data.products) ? data.products : []).forEach((product: any, col: number) => {
       (product.features || []).forEach((feature: any, row: number) => {
         map.set(feature.id, { productId: product.id, col, row, name: feature.name, kind: feature.kind, summary: feature.summary });
       });
@@ -55,10 +55,14 @@ export default function LandscapePage() {
 
   if (!data) return null;
 
-  const maxRows = Math.max(1, ...data.products.map((p: any) => (p.features || []).length));
-  const width = PAD * 2 + Math.max(1, data.products.length) * COL_W;
+  const products = Array.isArray(data.products) ? data.products : [];
+  const summary = data.summary || {};
+  const productEdges = Array.isArray(data.product_edges) ? data.product_edges : [];
+  const featureEdges = Array.isArray(data.feature_edges) ? data.feature_edges : [];
+  const maxRows = Math.max(1, ...products.map((p: any) => (p.features || []).length));
+  const width = PAD * 2 + Math.max(1, products.length) * COL_W;
   const height = PAD * 2 + HEAD_H + maxRows * ROW_H;
-  const selectedProduct = selected?.type === "product" ? data.products.find((p: any) => p.id === selected.id) : null;
+  const selectedProduct = selected?.type === "product" ? products.find((p: any) => p.id === selected.id) : null;
   const selectedFeature = selected?.type === "feature" ? featureIndex.get(selected.id) : null;
 
   /**
@@ -81,23 +85,23 @@ export default function LandscapePage() {
         <div>
           <div className="pkm-pano-kicker">知识全景</div>
           <h1>产品、功能与上下游关系</h1>
-          <p>每个产品列出功能细分。打开图层即可看到产品之间、功能之间的依赖与上下游，形成平台级完整视图。</p>
+          <p>跨产品看功能与上下游，校验公司知识是否同一口径、关系是否可推理。点进产品进入该产品的收集与治理。</p>
         </div>
         <div className="pkm-pano-kpis">
           <div className="pkm-pano-kpi">
-            <em>{data.summary.product_total}</em>
+            <em>{summary.product_total ?? products.length}</em>
             <span>产品</span>
           </div>
           <div className="pkm-pano-kpi">
-            <em>{data.summary.feature_total}</em>
+            <em>{summary.feature_total ?? 0}</em>
             <span>功能细分</span>
           </div>
           <div className="pkm-pano-kpi">
-            <em>{data.summary.product_edges}</em>
+            <em>{summary.product_edges ?? productEdges.length}</em>
             <span>产品关系</span>
           </div>
           <div className="pkm-pano-kpi">
-            <em>{data.summary.feature_edges}</em>
+            <em>{summary.feature_edges ?? featureEdges.length}</em>
             <span>功能关系</span>
           </div>
         </div>
@@ -121,7 +125,7 @@ export default function LandscapePage() {
         <div className="pkm-pano-canvas">
           <svg width={width} height={height}>
             <rect x={0} y={0} width={width} height={height} fill={colors.canvas} />
-            {data.products.map((product: any, col: number) => (
+            {products.map((product: any, col: number) => (
               <g key={product.id}>
                 <rect x={PAD + col * COL_W - 6} y={PAD} width={CARD_W + 12} height={height - PAD * 2} rx={12} fill={colors.accent} opacity={0.04} />
                 <g style={{ cursor: "pointer" }} onClick={() => setSelected({ type: "product", id: product.id })}>
@@ -164,8 +168,8 @@ export default function LandscapePage() {
               </g>
             ))}
             {showProduct
-              ? data.product_edges.map((edge: any) => {
-                  const from = data.products.findIndex((p: any) => p.id === edge.from_id);
+              ? productEdges.map((edge: any) => {
+                  const from = products.findIndex((p: any) => p.id === edge.from_id);
                   const to = data.products.findIndex((p: any) => p.id === edge.to_id);
                   if (from < 0 || to < 0) return null;
                   const a = productPoint(from);
@@ -182,7 +186,7 @@ export default function LandscapePage() {
                 })
               : null}
             {showFeature
-              ? data.feature_edges.map((edge: any) => {
+              ? featureEdges.map((edge: any) => {
                   const a = featurePoint(edge.from_id);
                   const b = featurePoint(edge.to_id);
                   if (!a || !b) return null;
@@ -246,7 +250,7 @@ export default function LandscapePage() {
               </div>
               <p className="pkm-pano-q">{selectedFeature.summary || "暂无说明"}</p>
               <h4>关联功能</h4>
-              {data.feature_edges
+              {featureEdges
                 .filter((e: any) => e.from_id === selected?.id || e.to_id === selected?.id)
                 .map((edge: any) => (
                   <div key={edge.id} className="pkm-pano-rel-item">

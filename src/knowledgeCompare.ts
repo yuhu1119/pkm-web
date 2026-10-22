@@ -1,4 +1,5 @@
 import type { Entity, KnowledgeType } from "./api";
+import { asPayload } from "./api";
 
 export type FieldDecision = "keep" | "take";
 export type CompareAction = "confirm" | "overwrite";
@@ -43,7 +44,7 @@ export function snapshotFromEntity(entity: Pick<Entity, "name" | "summary" | "pa
   return {
     name: entity.name || "",
     summary: entity.summary || "",
-    payload: { ...(entity.payload || {}) },
+    payload: { ...asPayload(entity.payload) },
     tags: [...(entity.tags || [])],
     status: entity.status,
   };
@@ -60,6 +61,9 @@ export function snapshotFromExtract(row: any, typeMeta: KnowledgeType): Knowledg
     if (STEWARD_KEYS.includes(field.key)) return;
     payload[field.key] = String(row?.payload?.[field.key] ?? "");
   });
+  if (!typeMeta.fields.some((field) => field.key === "aliases")) {
+    payload.aliases = String(row?.payload?.aliases ?? "");
+  }
   return {
     name: String(row?.name || ""),
     summary: String(row?.summary || ""),
@@ -113,6 +117,20 @@ export function buildCompareRows(typeMeta: KnowledgeType, current: KnowledgeSnap
       fill_hint: field.fill_hint,
     });
   });
+  if (!typeMeta.fields.some((field) => field.key === "aliases")) {
+    const left = String(current.payload?.aliases ?? "");
+    const right = String(proposed.payload?.aliases ?? "");
+    rows.push({
+      key: "aliases",
+      label: "别名",
+      current: left,
+      proposed: right,
+      changed: asText(left) !== asText(right),
+      blankIncoming: !asText(right) && !!asText(left),
+      type: "text",
+      fill_hint: "同一对象的其他叫法，顿号分隔",
+    });
+  }
   rows.push({
     key: "tags",
     label: "标签",
@@ -172,6 +190,9 @@ export function mergeSnapshot(
     if (STEWARD_KEYS.includes(field.key)) return;
     payload[field.key] = pick(field.key, String(current.payload?.[field.key] ?? ""), String(proposed.payload?.[field.key] ?? ""));
   });
+  if (!typeMeta.fields.some((field) => field.key === "aliases")) {
+    payload.aliases = pick("aliases", String(current.payload?.aliases ?? ""), String(proposed.payload?.aliases ?? ""));
+  }
   const tags = takeAll || decisions.tags === "take" ? [...(proposed.tags || [])] : [...(current.tags || [])];
   return {
     name: pick("name", current.name, proposed.name),

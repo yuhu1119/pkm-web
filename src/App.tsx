@@ -1,7 +1,9 @@
+/** 生产前端，契约以 pkm-api（SpeedLoop Lua）为准。本地 FastAPI 仓库仅作开发对照。 */
 import { Spin } from "antd";
 import type { ReactElement } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
-import { AuthProvider, useAuth } from "./auth";
+import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
+import { AuthProvider, hasAccess, useAuth } from "./auth";
+import NoAccessPage from "./pages/NoAccessPage";
 import AppLayout from "./pages/AppLayout";
 import DashboardPage from "./pages/DashboardPage";
 import EntityRedirect from "./pages/EntityRedirect";
@@ -39,6 +41,27 @@ function Private({ children }: { children: ReactElement }) {
   if (!user) {
     return <Navigate to="/login" replace />;
   }
+  if (!hasAccess(user)) {
+    return <NoAccessPage />;
+  }
+  return children;
+}
+
+/**
+ * 仅管理员可进入系统设置。
+ */
+function AdminOnly({ children }: { children: ReactElement }) {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Spin />
+      </div>
+    );
+  }
+  if (!user || user.role !== "admin") {
+    return <Navigate to="/" replace />;
+  }
   return children;
 }
 
@@ -49,7 +72,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <BrowserRouter>
+        <HashRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route
@@ -67,7 +90,7 @@ export default function App() {
               <Route path="ask" element={<AskPage />} />
               <Route path="apps" element={<KnowledgeAppsPage />} />
               <Route path="products" element={<ProductsPage />} />
-              <Route path="products/:productId/ask" element={<Navigate to="/ask" replace />} />
+              <Route path="products/:productId/ask" element={<Navigate to="/" replace />} />
               <Route path="products/:productId" element={<ProductWorkspaceGuard />}>
                 <Route index element={<Navigate to="overview" replace />} />
                 <Route path="overview" element={<DashboardPage />} />
@@ -81,7 +104,14 @@ export default function App() {
                 <Route path="search" element={<SearchPage />} />
               </Route>
               <Route path="skills" element={<SkillsPage />} />
-              <Route path="settings" element={<SettingsPage />} />
+              <Route
+                path="settings"
+                element={
+                  <AdminOnly>
+                    <SettingsPage />
+                  </AdminOnly>
+                }
+              />
               <Route path="dashboard" element={<Navigate to="/" replace />} />
               <Route path="structure" element={<LegacyRedirect to="/structure" />} />
               <Route path="panorama" element={<LegacyRedirect to="/structure" />} />
@@ -96,9 +126,11 @@ export default function App() {
               <Route path="entity/new" element={<EntityRedirect mode="create" />} />
               <Route path="entity/:id" element={<EntityRedirect mode="view" />} />
               <Route path="entity/:id/edit" element={<EntityRedirect mode="edit" />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
-        </BrowserRouter>
+        </HashRouter>
       </AuthProvider>
     </ThemeProvider>
   );

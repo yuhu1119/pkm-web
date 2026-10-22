@@ -1,7 +1,9 @@
 import { Button, Card, Collapse, Form, Input, Modal, Popconfirm, Select, Table, Tag, Typography, message } from "antd";
+import { ResultTable } from "../components/SearchTable";
 import { useEffect, useState } from "react";
-import { api, publicApiOrigin } from "../api";
-import { useAuth } from "../auth";
+import { api } from "../api";
+import { CAP_HINTS, hasCap, useAuth } from "../auth";
+import CapAction from "../components/CapAction";
 import { useProduct } from "../product";
 import KnowledgeReleasesPanel from "./KnowledgeReleasesPanel";
 
@@ -15,7 +17,7 @@ const DOCK_ENDPOINTS = [
 ];
 
 /**
- * 平台知识应用：打包版本，再用应用 Token 对接其它 AI 平台。
+ * 平台知识应用：唯一的打包、下载与对接入口。
  */
 export default function KnowledgeAppsPage() {
   const { user } = useAuth();
@@ -25,15 +27,27 @@ export default function KnowledgeAppsPage() {
   const [createdToken, setCreatedToken] = useState("");
   const [openCreate, setOpenCreate] = useState(false);
   const [form] = Form.useForm();
-  const canEdit = user?.role !== "viewer";
-  const apiOrigin = publicApiOrigin();
+  const canApp = hasCap(user, "app_write");
+  const apiOrigin = typeof window !== "undefined" ? window.location.origin.replace(/:\d+$/, ":8000") : "";
 
   /**
    * 刷新总览与凭据。
    */
   const load = () => {
-    api.get("/api/knowledge-apps").then((res) => setCatalog(res.data));
-    api.get("/api/apps").then((res) => setApps(res.data || []));
+    api
+      .get("/api/knowledge-apps")
+      .then((res) => setCatalog(res.data))
+      .catch(() =>
+        setCatalog({
+          global_prompt: "",
+          api_base: "/v1/knowledge",
+          summary: { product_total: 0, corpus_docs: 0, type_ready: 0 },
+        }),
+      );
+    api
+      .get("/api/apps")
+      .then((res) => setApps(res.data || []))
+      .catch(() => setApps([]));
   };
 
   useEffect(() => {
@@ -47,7 +61,7 @@ export default function KnowledgeAppsPage() {
       <div className="pkm-page-kicker">API</div>
       <h1 className="pkm-page-title">知识应用</h1>
       <p className="pkm-page-desc">
-        先把已治理知识打成版本，再给其它 AI 平台对接。下载用版本文件；在线调用先建应用 Token，不要用登录账号。
+        打包、下载和对接都在本页完成。先把已治理知识打成冻结版本，再用 Token 给其它平台调用。产品工作台的「投喂预览」只负责试问，不在那里打包。
       </p>
       <div className="pkm-kpi-row">
         <div className="pkm-kpi">
@@ -67,25 +81,21 @@ export default function KnowledgeAppsPage() {
       <KnowledgeReleasesPanel />
 
       <div className="pkm-section-title">对接</div>
-      <Card
-        title="应用 Token"
-        extra={
-          canEdit ? (
-            <Button type="primary" onClick={() => setOpenCreate(true)}>
-              新建应用
-            </Button>
-          ) : null
-        }
-      >
-        <p className="pkm-muted" style={{ marginTop: 0 }}>
-          给客服助手、向量库、评测脚本等机器用。创建后把 <code>pkm_</code> Token 配到对方平台，再请求上方版本或下面的接口。可限定产品范围，作废后立即失效。
-        </p>
-        <Table
+      <p className="pkm-muted" style={{ marginTop: 0, marginBottom: 12 }}>
+        给客服助手、向量库、评测脚本等机器用。创建后把 <code>pkm_</code> Token 配到对方平台。可限定产品范围，作废后立即失效。
+      </p>
+      <ResultTable
           rowKey="id"
-          size="small"
-          pagination={false}
           dataSource={apps}
+          onRefresh={load}
           locale={{ emptyText: "还没有应用。新建后把 Token 配到其它 AI 平台，即可读取冻结版本。" }}
+          operations={
+            <CapAction allowed={canApp} hint={CAP_HINTS.app_write}>
+              <Button type="primary" onClick={() => setOpenCreate(true)}>
+                新建
+              </Button>
+            </CapAction>
+          }
           columns={[
             { title: "应用", dataIndex: "name" },
             { title: "Token 前缀", dataIndex: "token_prefix", width: 160 },
@@ -101,9 +111,11 @@ export default function KnowledgeAppsPage() {
             },
             {
               title: "操作",
+              key: "operations",
+              hideable: false,
               width: 90,
               render: (_: unknown, row: any) =>
-                canEdit && !row.revoked ? (
+                canApp && !row.revoked ? (
                   <Popconfirm
                     title="作废后不可恢复，其它平台将无法调用"
                     onConfirm={async () => {
@@ -120,7 +132,6 @@ export default function KnowledgeAppsPage() {
             },
           ]}
         />
-      </Card>
 
       <Card title="调用方式" style={{ marginTop: 16 }}>
         <p className="pkm-muted" style={{ marginTop: 0 }}>

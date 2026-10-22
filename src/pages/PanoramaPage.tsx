@@ -3,6 +3,8 @@ import { Button, Progress, Tag, Typography } from "antd";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { CAP_HINTS, canWriteProduct, hasCap, useAuth } from "../auth";
+import CapAction from "../components/CapAction";
 import GovernanceTag from "../components/GovernanceTag";
 import { workspacePath } from "../paths";
 import { useProduct } from "../product";
@@ -263,6 +265,7 @@ function packInstanceTags(titles: { id: number; name: string }[]) {
  * 产品知识图谱：对象卡片内嵌实例标签，图层三态控制连线。
  */
 export default function PanoramaPage() {
+  const { user } = useAuth();
   const [data, setData] = useState<any>(null);
   const [graphEdges, setGraphEdges] = useState<GraphEdge[]>([]);
   const [featEdges, setFeatEdges] = useState<FeatEdge[]>([]);
@@ -287,14 +290,25 @@ export default function PanoramaPage() {
   const shouldCenterRef = useRef(true);
   const navigate = useNavigate();
   const { current } = useProduct();
-  const { openEntity, openSource } = useWorkspace();
+  const writable = canWriteProduct(user, current);
+  const { openEntity } = useWorkspace();
   const { mode, palette } = useTheme();
   const colors = graphColors(palette, mode);
   const statusMeta = colors.status;
   const base = current?.id ? workspacePath(current.id) : "/products";
 
   const load = () => {
-    api.get("/api/panorama").then((res) => setData(res.data));
+    api
+      .get("/api/panorama")
+      .then((res) =>
+        setData({
+          nodes: res.data?.nodes || [],
+          edges: res.data?.edges || [],
+          models: res.data?.models || [],
+          summary: res.data?.summary || {},
+        }),
+      )
+      .catch(() => setData({ nodes: [], edges: [], models: [], summary: {} }));
     api.get("/api/graph").then((res) => setGraphEdges(res.data.edges || [])).catch(() => setGraphEdges([]));
     if (!current?.id) return;
     Promise.all([api.get(`/api/products/${current.id}/features`), api.get("/api/feature-relations")])
@@ -326,7 +340,7 @@ export default function PanoramaPage() {
 
   const instById = useMemo(() => {
     const map = new Map<number, { type_id: string; name: string }>();
-    nodes.forEach((node) => node.titles.forEach((item) => map.set(item.id, { type_id: node.type_id, name: item.name })));
+    nodes.forEach((node) => (node.titles || []).forEach((item) => map.set(item.id, { type_id: node.type_id, name: item.name })));
     return map;
   }, [nodes]);
 
@@ -371,7 +385,7 @@ export default function PanoramaPage() {
     const packByType = new Map<string, ReturnType<typeof packInstanceTags>>();
     const cardH = new Map<string, number>();
     nodes.forEach((node) => {
-      const packed = showInst ? packInstanceTags(node.titles) : { tags: [] as InstTagLayout[], height: 0 };
+      const packed = showInst ? packInstanceTags(node.titles || []) : { tags: [] as InstTagLayout[], height: 0 };
       packByType.set(node.type_id, packed);
       extraByType.set(node.type_id, showInst ? Math.max(0, node.instance_count - packed.tags.length) : 0);
       cardH.set(node.type_id, packed.height ? CARD_HEAD + packed.height + 10 : CARD_INFO_H + 8);
@@ -400,7 +414,7 @@ export default function PanoramaPage() {
         instAnchor.set(tag.id, box);
         instTags.set(tag.id, { ...tag, x: box.x, y: box.y });
       });
-      node.titles.forEach((item) => {
+      (node.titles || []).forEach((item) => {
         if (!instAnchor.has(item.id)) instAnchor.set(item.id, card);
       });
     });
@@ -688,7 +702,7 @@ export default function PanoramaPage() {
       <div className="pkm-page-kicker">知识图谱</div>
       <h1 className="pkm-page-title">{data.product?.name || "产品"} · 对象与实例</h1>
       <p className="pkm-page-desc">
-        图层三次点击：关闭 / 经过对象 / 显示全部。点对象只保留对象之间、对象与模型的关系；点实例只看该实例的关系。
+        展示对象、实例与引用关系，供校验知识是否可被推理。功能级上下游请看「功能与关系」。
       </p>
 
       <div className="pkm-pano-toolbar">
@@ -839,7 +853,7 @@ export default function PanoramaPage() {
           >
             <svg width={layout.width} height={layout.height}>
               <rect x={0} y={0} width={layout.width} height={layout.height} fill={colors.canvas} />
-              {data.models.map((model: any, idx: number) => {
+              {(data.models || []).map((model: any, idx: number) => {
                 const lit = litModels.has(model.code);
                 const tone = MODEL_COLOR[idx];
                 const x = PAD_X + idx * COL_W;
@@ -873,7 +887,7 @@ export default function PanoramaPage() {
                 const dim = Boolean((selected || selectedInst) && !relatedTypes.has(node.type_id));
                 const extra = layout.extraByType.get(node.type_id) || 0;
                 const modelColor = MODEL_COLOR[(node.model_code - 1) % 10];
-                const showTagRule = node.titles.some((item) => layout.instTags.has(item.id));
+                const showTagRule = (node.titles || []).some((item) => layout.instTags.has(item.id));
                 return (
                   <g
                     key={node.type_id}
@@ -1000,7 +1014,7 @@ export default function PanoramaPage() {
 
               {nodes.map((node) => {
                 const dim = Boolean((selected || selectedInst) && !relatedTypes.has(node.type_id));
-                return node.titles.map((item) => {
+                return (node.titles || []).map((item) => {
                   const tag = layout.instTags.get(item.id);
                   if (!tag) return null;
                   const on = relatedInstIds.has(item.id);
@@ -1169,12 +1183,11 @@ export default function PanoramaPage() {
                 )}
               </div>
               <div className="pkm-pano-actions">
-                <Button size="small" onClick={() => openSource(inspectorNode.type_id)}>
-                  上传文档
-                </Button>
-                <Button size="small" onClick={() => openEntity({ mode: "create", typeId: inspectorNode.type_id })}>
-                  新建
-                </Button>
+                <CapAction allowed={writable && hasCap(user, "entity_create")} hint={writable ? CAP_HINTS.entity_create : CAP_HINTS.product_write}>
+                  <Button size="small" onClick={() => openEntity({ mode: "create", typeId: inspectorNode.type_id })}>
+                    新建
+                  </Button>
+                </CapAction>
                 <Button size="small" type="primary" onClick={() => navigate(`${base}/knowledge/${inspectorNode.model_code}`)}>
                   打开模型
                 </Button>

@@ -6,12 +6,10 @@ import ExtractSkillsPanel from "./ExtractSkillsPanel";
 export default function SkillsPage() {
   return (
     <div>
-      <div className="pkm-page-kicker">Skills</div>
-      <h1 className="pkm-page-title">技能配置</h1>
-      <p className="pkm-page-desc">配置文档解析原则，并按对象调整治理字段。详情页与 AI 抽文档共用这一套字段。</p>
-      <div style={{ marginTop: 20 }}>
-        <ExtractSkillsPanel />
-      </div>
+      <p className="pkm-page-desc">
+        每位用户的默认技能相同。你保存的覆盖只作用于自己的抽取，不影响其他人。系统提示词、全局原则、文档种类与对象技能都在这里配置。
+      </p>
+      <ExtractSkillsPanel />
     </div>
   );
 }
